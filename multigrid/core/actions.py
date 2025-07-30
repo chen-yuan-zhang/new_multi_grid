@@ -9,6 +9,7 @@ class Action(enum.IntEnum):
     left = 0 #: Turn left
     right = enum.auto() #: Turn right
     forward = enum.auto() #: Move forward
+    stay = enum.auto() #: Stay in place
     pickup = enum.auto() #: Pick up an object
     drop = enum.auto() #: Drop an object
     toggle = enum.auto() #: Toggle / activate an object

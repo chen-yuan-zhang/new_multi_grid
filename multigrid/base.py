@@ -90,8 +90,8 @@ class MultiGridEnv(gym.Env, RandomMixin, ABC):
         width: int | None = None,
         height: int | None = None,
         max_steps: int = 100,
-        see_through_walls: bool = False,
-        agent_view_size: int = 7,
+        see_through_walls: list = [False],
+        agent_view_size: list = [7],
         allow_agent_overlap: bool = True,
         joint_reward: bool = False,
         success_termination_mode: Literal['any', 'all'] = 'any',
@@ -163,8 +163,8 @@ class MultiGridEnv(gym.Env, RandomMixin, ABC):
                 agent = Agent(
                     index=i,
                     mission_space=self.mission_space,
-                    view_size=agent_view_size,
-                    see_through_walls=see_through_walls,
+                    view_size=agent_view_size[i],
+                    see_through_walls=see_through_walls[i],
                 )
                 agent.state = self.agent_states[i]
                 self.agents.append(agent)
@@ -240,6 +240,9 @@ class MultiGridEnv(gym.Env, RandomMixin, ABC):
 
         Parameters
         ----------
+        base_grid : ndarray[int] | None
+            Base grid to use for generating the environment. If provided, it should be a square grid of shape (N, N).
+            If None, a new grid will be generated.
         width : int
             Width of the grid
         height : int
