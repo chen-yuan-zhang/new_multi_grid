@@ -57,7 +57,8 @@ class Agent:
         index: int,
         mission_space: MissionSpace = MissionSpace.from_string('maximize reward'),
         view_size: int = 7,
-        see_through_walls: bool = False):
+        see_through_walls: bool = False,
+        allow_agent_overlap: bool = True):
         """
         Parameters
         ----------
@@ -69,6 +70,8 @@ class Agent:
             The size of the agent's view (must be odd)
         see_through_walls : bool
             Whether the agent can see through walls
+        allow_agent_overlap : bool
+            Whether agents can occupy the same cell in the grid
         """
         self.index: int = index
         self.state: AgentState = AgentState()
@@ -79,6 +82,7 @@ class Agent:
         assert view_size >= 3
         self.view_size = view_size
         self.see_through_walls = see_through_walls
+        self.allow_agent_overlap = allow_agent_overlap
 
         # Observations are dictionaries containing an
         # encoding of the grid and a textual 'mission' string

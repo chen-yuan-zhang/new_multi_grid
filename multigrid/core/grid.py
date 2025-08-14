@@ -98,6 +98,24 @@ class Grid:
             self.state[x, y] = WorldObj.empty()
         else:
             raise TypeError(f"cannot set grid value to {type(obj)}")
+        
+    def is_valid_pos(self, x: int, y: int) -> bool:
+        """
+        Check if the given coordinates are valid within the grid.
+
+        Parameters
+        ----------
+        x : int
+            Grid x-coordinate
+        y : int
+            Grid y-coordinate
+
+        Returns
+        -------
+        bool
+            True if the coordinates are valid, False otherwise
+        """
+        return 0 <= x < self.width and 0 <= y < self.height
 
     def get(self, x: int, y: int) -> WorldObj | None:
         """

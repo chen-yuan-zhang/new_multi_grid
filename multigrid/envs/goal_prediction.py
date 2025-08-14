@@ -1,11 +1,45 @@
 from __future__ import annotations
 
+from typing import Literal
 from multigrid import MultiGridEnv
 from multigrid.core import Grid
-from multigrid.core.constants import Direction
-from multigrid.core.world_object import Goal
+from multigrid.core.constants import Direction, Type, IDX_TO_COLOR
+from multigrid.core.world_object import Goal, Wall
 
 import numpy as np
+import random
+
+
+NEIGHBOURS = (((1,0), (-1, 0), (0, 1), (0, -1)),((-1, 0), (-1, 1), (0, 2), (1, 2), (2, 1), (2, 0), (0, -1), (1, -1)))
+
+def get_neighbours(cell, size, cell_size):
+    """
+    Get the neighboring cells for a given cell in a grid.
+    
+    Parameters
+    ----------
+    cell : tuple[int, int]
+        The current cell position
+    size : int
+        The size of the grid
+    cell_size : int
+        The size of each cell
+        
+    Returns
+    -------
+    list[tuple[int, int]]
+        List of neighboring cell positions
+    """
+    x, y = cell
+    neighbors = []
+    
+    # Check all four directions
+    for dx, dy in NEIGHBOURS[cell_size - 1]:
+        new_x, new_y = x + dx, y + dy
+        if 0 <= new_x < size and 0 <= new_y < size:
+            neighbors.append((new_x, new_y))
+    
+    return neighbors
 
 class AGREnv(MultiGridEnv):
     """
@@ -102,15 +136,11 @@ class AGREnv(MultiGridEnv):
         self,
         size: int | None = 8,
         base_grid: np.ndarray | None = None,
-        goals: list[tuple[int, int]] | None = None,
-        goal: tuple[int, int] | None = None,
         num_goals: int | None = 3,
         enable_hidden_cost: bool = False,
         hidden_cost: np.ndarray | None = None,
         initial_distance: int | None = 3,
         max_steps: int | None = None,
-        joint_reward: bool = False,
-        success_termination_mode: str = 'any',
         **kwargs):
         """
         Parameters
@@ -151,14 +181,21 @@ class AGREnv(MultiGridEnv):
         if base_grid is not None:
             assert base_grid.shape[0] == base_grid.shape[1], "base_grid must be square"
             size = base_grid.shape[0]
+        
+        # Ensure size is not None
+        if size is None:
+            size = 8  # default size
+
+        self.grid_size = size
 
         self.agents_start_pos = None
         self.agents_start_dir = None
         self.base_grid = base_grid
         self.num_goals = num_goals
         self.initial_distance = initial_distance
+        self.enable_hidden_cost = enable_hidden_cost
 
-        if enable_hidden_cost:
+        if self.enable_hidden_cost:
             if hidden_cost is None:
                 self.hidden_cost = np.random.random((size, size))
             else:
@@ -168,25 +205,19 @@ class AGREnv(MultiGridEnv):
 
         self.goals = []
         self.goal = None
-        if goals is not None:
-            self.goals = goals
-            self.num_goals = len(goals) # set the number of goals to the length of the provided list
-
-        if goal is not None:
-            self.goal = goal
-        
-            assert self.goal in self.goals, "The goal must be in the list of goals"
 
         super().__init__(
             mission_space="predicte the goal of the actor",
             grid_size=size,
             agents=2,
-            max_steps=max_steps or (4 * size**2),
+            agent_view_size=[5, 5],
             see_through_walls=[False, False],
-            joint_reward=joint_reward,
-            success_termination_mode=success_termination_mode,
+            allow_agent_overlap=[True, False],
+            max_steps=max_steps or (4 * size**2),
             **kwargs,
         )
+
+        self.mission = self.mission_space.sample()
 
         self.observer = self.agents[0]
         self.target = self.agents[1]
@@ -208,93 +239,151 @@ class AGREnv(MultiGridEnv):
         
     #     return obs, info
 
-    # def _gen_goals(self, num_goals):
-    #     """
-    #     Generate a list of goal positions in the grid
-    #     """
-    #     for i in range(num_goals):
-
-    #         obj = Goal(IDX_TO_COLOR[i])
-    #         if len(self.goals) == num_goals:
-    #             pos = self.goals[i]
-    #             self.grid.set(pos[0], pos[1], obj)
-    #         else:
-    #             pos = self.place_obj(obj)
-    #             self.goals.append(pos)
-
-    #         self.POS2COLOR[pos] = str(IDX_TO_COLOR[i]).split(".")[1]  
-
-    #     # goals_costs = get_cost(self.base_grid, self.goals, self.target.pos, self.hidden_cost)
-    #     # print(self.goals)
-    #     # print(goals_costs)
-    #     self.goal = self.goals[np.random.randint(0, len(self.goals)-1)]
-
-
-    # def generate_base_grid(self, size, cell_size=1):
-
-    #     def unfill(grid, coord, size, cell_size):
-    #         x1 = np.clip(coord[0], 1, size-1)
-    #         x2 = np.clip(x1+cell_size, 1, size-1)
-    #         y1 = np.clip(coord[1], 1, size-1)
-    #         y2 = np.clip(y1+cell_size, 1, size-1)
-    #         grid[x1:x2, y1:y2] = 0
-    #         return grid
-
-    #     grid = np.ones((size, size), dtype=int)
-
-    #     #Choose 2 random points
-    #     start = np.random.randint(0, size//cell_size, 2)
-    #     grid = unfill(grid, start, size, cell_size)
-    #     explored = {tuple(start): 1}
-    #     queue = get_neighbours(start, size, cell_size)
-
-    #     while len(queue)>0:
+    def reset(self, reset_grid=True, reset_agents = True):
+        """
+        Reset the environment
+        """
+        if reset_grid:
+            # Reset the grid and agents
+            self.base_grid = None
+            self.agents_start_pos = None
+            self.agents_start_dir = None
+            self.goals = []
+            self.goal = None
             
-    #         # idx = random.randint(0, len(queue)-1)
-    #         idx = 3 if len(queue)>3 else 0
-    #         cell = queue[idx]
-    #         explored[tuple(cell)] = 1
-    #         neighbours = get_neighbours(cell, size, cell_size)
-    #         filled_neighbours = [neighbour for neighbour in neighbours 
-    #                             if grid[tuple(neighbour)] == 1]
 
-    #         # The cell doesn't have 2 explored neighbours
-    #         if ((cell_size==1) and (len(filled_neighbours) > 2) or (cell_size==2) and (len(filled_neighbours) > 2)):
-    #             # grid[tuple(cell)] = 0
-    #             grid = unfill(grid, cell, size, cell_size)
-    #             queue += [neighbour for neighbour in filled_neighbours
-    #                     if tuple(neighbour) not in explored]
+            if self.enable_hidden_cost:
+                self.hidden_cost = np.random.random((self.grid_size, self.grid_size))
+
+            
+            
+        elif reset_agents:
+            # Reset only the agents
+            self.agents_start_pos = None
+            self.agents_start_dir = None
+            self.goals = []
+            self.goal = None
+            
+        
+        self._gen_grid(self.grid_size, self.grid_size)
+        for agent in self.agents:
+            agent.state.terminated = False
+
+        self.step_count = 0
+        observation = self.gen_obs()
+        obs = self.mod_obs(observation)
+        # Add initial information of this episode
+        infos = {
+            'base_grid': self.base_grid,
+            'initial_distance': self.initial_distance,
+            'enable_hidden_cost': self.enable_hidden_cost,
+            'hidden_cost': self.hidden_cost,
+            'goals': self.goals,
+            'goal': self.goal,
+            'agents_start_pos': self.agents_start_pos,
+            'agents_start_dir': self.agents_start_dir,
+        }
+        
+
+        return obs, infos
+
+    def _gen_goals(self, num_goals):
+        """
+        Generate a list of goal positions in the grid
+        """
+        
+
+        for i in range(num_goals):
+            obj = Goal(IDX_TO_COLOR[i])  # Use the color from the mapping
+            pos = self.place_obj(obj)
+            self.goals.append(pos)
+
+        # Select a random goal as the true goal
+        self.goal = self.goals[np.random.randint(0, len(self.goals))]
+
+
+    def generate_base_grid(self, size):
+        # generate a random square grid with walls and empty spaces
+
+        def unfill(grid, coord, cell_size=1):
+            max_coord = grid.shape[0] - 1 # maximum coordinate
+            x1 = np.clip(coord[0], 1, max_coord)
+            x2 = np.clip(x1+cell_size, 1, max_coord)
+            y1 = np.clip(coord[1], 1, max_coord)
+            y2 = np.clip(y1+cell_size, 1, max_coord)
+            grid[x1:x2, y1:y2] = 0
+            return grid
+
+        grid = np.ones((size, size), dtype=int)
+        cell_size = 1  # Initialize cell_size
+
+        #Choose 2 random points
+        start = tuple(np.random.randint(1, size-1, 2))  # Avoid edges
+        grid = unfill(grid, start, 1)
+        explored = set()
+        queue = [start]
+
+        while len(queue)>0:
+            
+            # idx = random.randint(0, len(queue)-1)
+            idx = min(3, len(queue)-1) if len(queue)>3 else 0
+            cell = queue[idx]
+            explored.add(cell)
+            neighbours = get_neighbours(cell, size, cell_size)
+            filled_neighbours = [neighbour for neighbour in neighbours 
+                                if grid[neighbour] == 1]
+
+            # The cell doesn't have too many explored neighbours
+            if len(filled_neighbours) > 2:
+                grid = unfill(grid, cell, cell_size)
+                queue += [neighbour for neighbour in filled_neighbours
+                        if neighbour not in explored]
                 
-    #         queue.pop(idx)
-    #         # Change the cell size randomly
-    #         cell_size = random.randint(1, 2) if cell[0]%2==0 and cell[1]%2==0 else 1
+            queue.pop(idx)
+            # Change the cell size randomly
+            cell_size = np.random.randint(1, 3) if cell[0]%2==0 and cell[1]%2==0 else 1
 
-    #     return grid
+        return grid
     
-    # def position_agents(self, grid, init_sep, size):
-    #     # Search for a random position where all the cells are unfilled in a initial_separation distance
-
-    #     while True:
-    #         #  np.where(grid == 0)
-    #         row, col = np.where(grid == 0)
-    #         idx = random.randint(0, len(row)-1)
-    #         x, y = row[idx], col[idx]
-
-    #         # Check if the col or row is empty
-    #         if y+init_sep < size :
-    #             return (x, y+init_sep), (x, y), Direction.up, Direction.down 
-    #         elif x+init_sep < size:
-    #             return (x+init_sep, y), (x, y), Direction.left, Direction.down
-    #         elif y-init_sep >= 0 :
-    #             return (x, y-init_sep), (x, y), Direction.down, Direction.down
-    #         elif x-init_sep >= 0 :
-    #             return (x-init_sep, y), (x, y), Direction.right, Direction.down
+    def position_agents(self, grid, init_sep, size):
+        """
+        Search for a random position where all the cells are unfilled in a initial_separation distance
+        """
+        while True:
+            # Find all empty cells for target placement
+            row, col = np.where(grid == 0)
+            if len(row) == 0:  # Safety check - no empty cells
+                break
+                
+            # Randomly select target position from empty cells
+            idx = np.random.randint(0, len(row))
+            target_x, target_y = row[idx], col[idx]
+            
+            # Randomly choose one of the four directions for observer placement
+            directions = [
+                # (observer_pos, target_pos, observer_dir, target_dir)
+                ((target_x, target_y + init_sep), (target_x, target_y), Direction.up, np.random.randint(0, 4)),  # Observer north of target
+                ((target_x + init_sep, target_y), (target_x, target_y), Direction.left, np.random.randint(0, 4)),   # Observer east of target  
+                ((target_x, target_y - init_sep), (target_x, target_y), Direction.down, np.random.randint(0, 4)),     # Observer south of target
+                ((target_x - init_sep, target_y), (target_x, target_y), Direction.right, np.random.randint(0, 4))   # Observer west of target
+            ]
+            
+            # Filter valid directions (observer position must be within grid bounds)
+            valid_directions = []
+            for observer_pos, target_pos, observer_dir, target_dir in directions:
+                obs_x, obs_y = observer_pos
+                if 1 <= obs_x < size-1 and 1 <= obs_y < size-1:
+                    valid_directions.append((observer_pos, target_pos, observer_dir, target_dir))
+            
+            # If we have valid directions, randomly select one
+            if valid_directions:
+                return random.choice(valid_directions)
 
     def _gen_grid(self, width, height):
         """
         :meta private:
         """
-        # Create an empty grid
+        # Create an empty grid if not existing
         if self.base_grid is None:
             self.base_grid = self.generate_base_grid(width)
             
@@ -311,62 +400,70 @@ class AGREnv(MultiGridEnv):
             self.agents_start_dir = [observer_dir, target_dir]
 
         for i, agent in enumerate(self.agents):
-            if self.agents_start_pos is not None and self.agents_start_dir is not None:
-                agent.state.pos = self.agents_start_pos[i]
-                agent.state.dir = self.agents_start_dir[i]
+            agent.state.pos = self.agents_start_pos[i]
+            agent.state.dir = self.agents_start_dir[i]
 
         # Generate Goals
         if self.goal is None:
             self._gen_goals(self.num_goals)
 
     def mod_obs(self, obs):
-        # Pursuer
-        mod_observations = {}
-        mod_observations = [{"fov": obs[0]["image"], "grid": self.grid.state, 
-                             "pos": self.observer.pos, "dir": self.observer.dir}]
-        if 10 in obs[0]["image"]:
-            mod_observations[0]["target_pos"] = self.agents[1].pos
-            mod_observations[0]["target_dir"] = self.agents[1].dir
+        obs_observations = obs[0]
+        if 10 in obs_observations["image"]: # Check if the target is in the image
+            obs_observations["target_pos"] = self.target.state.pos
+            obs_observations["target_dir"] = self.target.state.dir
 
-        # Target
-        mod_observations.append({"fov": obs[1]["image"], "grid": self.grid.state, 
-                                 "pos": self.target.pos, "dir": self.target.dir})
-        return mod_observations
-    
-    def is_success(self, fwd_obj, agent):
-        # if fwd_obj is None:
-        #     return True if agent.reported_goal == self.goal else False
-        # else:
-        #     return fwd_obj.type == Type.goal
-        return False
+        # Add observer's position and direction to the observations
+        obs_observations["observer_pos"] = self.observer.state.pos
+        obs_observations["observer_dir"] = self.observer.state.dir
+
+        # Add target's position and direction to the actor's observations
+        obs[1]["target_pos"] = self.target.state.pos
+        obs[1]["target_dir"] = self.target.state.dir
         
-    def on_success(self, agent, rewards, terminations):
-        super().on_success(agent, rewards, terminations)
-        self.mission = f"{agent.name} Success"
-        print('\t' + self.mission)
+        obs[0] = obs_observations
+        return obs
 
-    def on_failure(self, agent, rewards, terminations):
-        super().on_success(agent, rewards, terminations)
-        self.mission = f"{agent.name} Failure"
-        print('\t' + self.mission)
-
-    def is_done(self):
-        """
-        Check if the episode is done
-        """
-
-        # base_done = super().is_done()
-        # done = self.target.pos == self.goal or self.agent_states.terminated[0]# self.observer.pos == self.goal
-
-        truncated = self.step_count >= self.max_steps
-        done = truncated or self.target.pos == self.goal
-        return done
     
     def step(self, actions):
         """
         :meta private:
         """
         observations, rewards, terminations, truncations, infos = super().step(actions)
+        # add observations modification
         observations = self.mod_obs(observations)
         
         return observations, rewards, terminations, truncations, infos
+    
+    def is_done(self) -> bool:
+        """
+        Return whether the current episode is finished (for all agents).
+        """
+        truncated = self.step_count >= self.max_steps
+        return truncated or self.target.state.terminated
+    
+    def on_success(
+        self,
+        agent,
+        rewards,
+        terminations):
+        """
+        Callback for when an agent completes its mission.
+
+        Parameters
+        ----------
+        agent : Agent
+            Agent that completed its mission
+        rewards : dict[AgentID, SupportsFloat]
+            Reward dictionary to be updated
+        terminations : dict[AgentID, bool]
+            Termination dictionary to be updated
+        """
+        # If the agent is the target, it has completed its mission
+        if agent == self.target:
+            agent.state.terminated = True # terminate this agent only
+            terminations[agent.index] = True
+
+
+
+        

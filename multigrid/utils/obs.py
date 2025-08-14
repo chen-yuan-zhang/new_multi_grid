@@ -90,7 +90,7 @@ def gen_obs_grid_encoding(
     obs_grid = gen_obs_grid(grid_state, agent_state, agent_view_size)
 
     # Generate and apply visibility masks
-    vis_mask = get_vis_mask(obs_grid)
+    vis_mask = get_vis_mask_raycasting(obs_grid)
     num_agents = len(agent_state)
     for agent in range(num_agents):
         if not see_through_walls:
@@ -124,7 +124,7 @@ def gen_obs_grid_vis_mask(
         Encoding of observed sub-grid for each agent
     """
     obs_grid = gen_obs_grid(grid_state, agent_state, agent_view_size)
-    return get_vis_mask(obs_grid)
+    return get_vis_mask_raycasting(obs_grid)
 
 
 @nb.njit(cache=True)
@@ -271,6 +271,71 @@ def get_vis_mask(obs_grid: ndarray[np.int_]) -> ndarray[np.bool_]:
                         vis_mask[agent, i, j - 1] = True
 
     return vis_mask
+
+@nb.njit(cache=True)
+def get_vis_mask_raycasting(obs_grid: ndarray[np.int_]) -> ndarray[np.bool_]:
+    """Ray-casting line-of-sight visibility algorithm"""
+    num_agents, width, height = obs_grid.shape[:3]
+    see_behind_mask = get_see_behind_mask(obs_grid)
+    vis_mask = np.zeros((num_agents, width, height), dtype=np.bool_)
+    
+    agent_x, agent_y = width // 2, height - 1  # Agent position
+    
+    for agent in range(num_agents):
+        vis_mask[agent, agent_x, agent_y] = True  # Agent can see itself
+        
+        for i in range(width):
+            for j in range(height):
+                if i == agent_x and j == agent_y:
+                    continue
+                    
+                # Cast ray from agent to target cell
+                if has_clear_line_of_sight(agent_x, agent_y, i, j, see_behind_mask[agent]):
+                    vis_mask[agent, i, j] = True
+    
+    return vis_mask
+
+@nb.njit(cache=True)
+def has_clear_line_of_sight(x1, y1, x2, y2, see_behind_mask):
+    """Check if there's a clear line of sight between two points"""
+    if x1 == x2 and y1 == y2:
+        return True
+    
+    # if x1 == x2:
+    #     # Vertical line
+    #     step = 1 if y2 > y1 else -1
+    #     for y in range(y1 + step, y2 + step, step):
+    #         if not see_behind_mask[x1, y]:
+    #             return False
+    #     return True
+    
+    # if y1 == y2:
+    #     # Horizontal line
+    #     step = 1 if x2 > x1 else -1
+    #     for x in range(x1 + step, x2 + step, step):
+    #         if not see_behind_mask[x, y1]:
+    #             return False
+    #     return True
+    
+    # Diagonal line
+    dx = x2 - x1
+    dy = y2 - y1
+    steps = max(abs(dx), abs(dy))
+    stepX = dx / steps
+    stepY = dy / steps
+
+    for i in range(steps + 1):
+        x = round(x1 + i * stepX)
+        y = round(y1 + i * stepY)
+
+        if not (0 <= x < see_behind_mask.shape[1] and 0 <= y < see_behind_mask.shape[0]):
+            return False
+
+        if not see_behind_mask[x, y]:
+            return False
+
+    return True
+
 
 @nb.njit(cache=True)
 def get_view_exts(

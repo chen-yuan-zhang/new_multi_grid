@@ -6,6 +6,7 @@ import numpy as np
 import pygame
 import pygame.freetype
 
+from copy import deepcopy
 from abc import ABC, abstractmethod
 from collections import defaultdict
 from gymnasium import spaces
@@ -92,7 +93,7 @@ class MultiGridEnv(gym.Env, RandomMixin, ABC):
         max_steps: int = 100,
         see_through_walls: list = [False],
         agent_view_size: list = [7],
-        allow_agent_overlap: bool = True,
+        allow_agent_overlap: list = [True],
         joint_reward: bool = False,
         success_termination_mode: Literal['any', 'all'] = 'any',
         failure_termination_mode: Literal['any', 'all'] = 'all',
@@ -165,6 +166,7 @@ class MultiGridEnv(gym.Env, RandomMixin, ABC):
                     mission_space=self.mission_space,
                     view_size=agent_view_size[i],
                     see_through_walls=see_through_walls[i],
+                    allow_agent_overlap=allow_agent_overlap[i]
                 )
                 agent.state = self.agent_states[i]
                 self.agents.append(agent)
@@ -378,6 +380,42 @@ class MultiGridEnv(gym.Env, RandomMixin, ABC):
 
         return observations
 
+    # def simulate_actions(self, actions: dict[AgentID, Action]):
+
+    #     """
+    #     Simulate actions without updating the environment state.
+
+    #     Parameters
+    #     ----------
+    #     actions : dict[AgentID, Action]
+    #         Action for each agent acting at this timestep
+
+    #     Returns
+    #     -------
+    #     results : dictionary of Simulated Agent states for each agent
+    #     """
+    #     # Simulate actions without updating the environment state
+    #     results = {}
+    #     # Randomize agent action order
+    #     if self.num_agents == 1:
+    #         order = (0,)
+    #     else:
+    #         order = self.np_random.random(size=self.num_agents).argsort()
+
+    #     # Update agent states, grid states, and reward from actions
+    #     for i in order:
+    #         if i not in actions:
+    #             continue
+
+    #         agent, action = self.agents[i], actions[i]
+
+    #         if agent.state.terminated:
+    #             continue
+        
+    #         SimulatedAgent = deepcopy(agent)
+            
+    #         if action == 
+
     def handle_actions(
         self, actions: dict[AgentID, Action]) -> dict[AgentID, SupportsFloat]:
         """
@@ -422,14 +460,16 @@ class MultiGridEnv(gym.Env, RandomMixin, ABC):
             # Move forward
             elif action == Action.forward:
                 fwd_pos = agent.front_pos
+                if not self.grid.is_valid_pos(*fwd_pos):
+                    continue
                 fwd_obj = self.grid.get(*fwd_pos)
 
-                if fwd_obj is None or fwd_obj.can_overlap():
-                    if not self.allow_agent_overlap:
-                        agent_present = np.bitwise_and.reduce(
-                            self.agent_states.pos == fwd_pos, axis=1).any()
-                        if agent_present:
-                            continue
+                if fwd_obj is None or fwd_obj.can_overlap() or agent.allow_agent_overlap:
+                    # if not self.allow_agent_overlap:
+                    #     agent_present = np.bitwise_and.reduce(
+                    #         self.agent_states.pos == fwd_pos, axis=1).any()
+                    #     if agent_present:
+                    #         continue
 
                     agent.state.pos = fwd_pos
                     if fwd_obj is not None:
@@ -470,7 +510,7 @@ class MultiGridEnv(gym.Env, RandomMixin, ABC):
                     fwd_obj.toggle(self, agent, fwd_pos)
 
             # Done action (not used by default)
-            elif action == Action.done:
+            elif action == Action.done or action == Action.stay:
                 pass
 
             else:
@@ -748,6 +788,8 @@ class MultiGridEnv(gym.Env, RandomMixin, ABC):
 
                     # Mark this cell to be highlighted
                     highlight_mask[abs_i, abs_j] = True
+
+            break  # Only render the first agent's POV
 
         # Render the whole grid
         img = self.grid.render(
