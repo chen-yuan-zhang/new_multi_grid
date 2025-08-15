@@ -239,7 +239,7 @@ class AGREnv(MultiGridEnv):
         
     #     return obs, info
 
-    def reset(self, reset_grid=True, reset_agents = True):
+    def reset(self, reset_grid=True, reset_agents = True, hidden_cost=None):
         """
         Reset the environment
         """
@@ -253,7 +253,7 @@ class AGREnv(MultiGridEnv):
             
 
             if self.enable_hidden_cost:
-                self.hidden_cost = np.random.random((self.grid_size, self.grid_size))
+                self.hidden_cost = hidden_cost if hidden_cost is not None else np.ones((self.grid_size, self.grid_size))
 
             
             
