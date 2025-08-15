@@ -137,6 +137,10 @@ class AGREnv(MultiGridEnv):
         size: int | None = 8,
         base_grid: np.ndarray | None = None,
         num_goals: int | None = 3,
+        goals: list[tuple[int, int]] | None = [],
+        goal: tuple[int, int] | None = None,
+        agents_start_pos: list[tuple[int, int]] | None = None,
+        agents_start_dir: list[int] | None = None,  
         enable_hidden_cost: bool = False,
         hidden_cost: np.ndarray | None = None,
         initial_distance: int | None = 3,
@@ -188,8 +192,8 @@ class AGREnv(MultiGridEnv):
 
         self.grid_size = size
 
-        self.agents_start_pos = None
-        self.agents_start_dir = None
+        self.agents_start_pos = agents_start_pos
+        self.agents_start_dir = agents_start_dir
         self.base_grid = base_grid
         self.num_goals = num_goals
         self.initial_distance = initial_distance
@@ -201,10 +205,10 @@ class AGREnv(MultiGridEnv):
             else:
                 self.hidden_cost = hidden_cost
         else:
-            self.hidden_cost = np.zeros((size, size))
+            self.hidden_cost = np.ones((size, size))
 
-        self.goals = []
-        self.goal = None
+        self.goals = goals
+        self.goal = goal
 
         super().__init__(
             mission_space="predicte the goal of the actor",
@@ -239,32 +243,12 @@ class AGREnv(MultiGridEnv):
         
     #     return obs, info
 
-    def reset(self, reset_grid=True, reset_agents = True, hidden_cost=None):
+    def reset(self, seed = None, **kwargs):
         """
         Reset the environment
         """
-        if reset_grid:
-            # Reset the grid and agents
-            self.base_grid = None
-            self.agents_start_pos = None
-            self.agents_start_dir = None
-            self.goals = []
-            self.goal = None
-            
 
-            if self.enable_hidden_cost:
-                self.hidden_cost = hidden_cost if hidden_cost is not None else np.ones((self.grid_size, self.grid_size))
-
-            
-            
-        elif reset_agents:
-            # Reset only the agents
-            self.agents_start_pos = None
-            self.agents_start_dir = None
-            self.goals = []
-            self.goal = None
-            
-        
+              
         self._gen_grid(self.grid_size, self.grid_size)
         for agent in self.agents:
             agent.state.terminated = False
@@ -283,6 +267,9 @@ class AGREnv(MultiGridEnv):
             'agents_start_pos': self.agents_start_pos,
             'agents_start_dir': self.agents_start_dir,
         }
+
+        if self.render_mode == 'human':
+            self.render()
         
 
         return obs, infos
