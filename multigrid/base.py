@@ -379,42 +379,7 @@ class MultiGridEnv(gym.Env, RandomMixin, ABC):
             }
 
         return observations
-
-    # def simulate_actions(self, actions: dict[AgentID, Action]):
-
-    #     """
-    #     Simulate actions without updating the environment state.
-
-    #     Parameters
-    #     ----------
-    #     actions : dict[AgentID, Action]
-    #         Action for each agent acting at this timestep
-
-    #     Returns
-    #     -------
-    #     results : dictionary of Simulated Agent states for each agent
-    #     """
-    #     # Simulate actions without updating the environment state
-    #     results = {}
-    #     # Randomize agent action order
-    #     if self.num_agents == 1:
-    #         order = (0,)
-    #     else:
-    #         order = self.np_random.random(size=self.num_agents).argsort()
-
-    #     # Update agent states, grid states, and reward from actions
-    #     for i in order:
-    #         if i not in actions:
-    #             continue
-
-    #         agent, action = self.agents[i], actions[i]
-
-    #         if agent.state.terminated:
-    #             continue
-        
-    #         SimulatedAgent = deepcopy(agent)
-            
-    #         if action == 
+    
 
     def handle_actions(
         self, actions: dict[AgentID, Action]) -> dict[AgentID, SupportsFloat]:
