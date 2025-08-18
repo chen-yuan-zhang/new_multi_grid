@@ -446,6 +446,8 @@ class MultiGridEnv(gym.Env, RandomMixin, ABC):
             # Pick up an object
             elif action == Action.pickup:
                 fwd_pos = agent.front_pos
+                if not self.grid.is_valid_pos(*fwd_pos):
+                    continue
                 fwd_obj = self.grid.get(*fwd_pos)
 
                 if fwd_obj is not None and fwd_obj.can_pickup():
@@ -456,6 +458,8 @@ class MultiGridEnv(gym.Env, RandomMixin, ABC):
             # Drop an object
             elif action == Action.drop:
                 fwd_pos = agent.front_pos
+                if not self.grid.is_valid_pos(*fwd_pos):
+                    continue
                 fwd_obj = self.grid.get(*fwd_pos)
 
                 if agent.state.carrying and fwd_obj is None:
@@ -469,6 +473,8 @@ class MultiGridEnv(gym.Env, RandomMixin, ABC):
             # Toggle/activate an object
             elif action == Action.toggle:
                 fwd_pos = agent.front_pos
+                if not self.grid.is_valid_pos(*fwd_pos):
+                    continue
                 fwd_obj = self.grid.get(*fwd_pos)
 
                 if fwd_obj is not None:

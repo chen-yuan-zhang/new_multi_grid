@@ -137,7 +137,7 @@ class AGREnv(MultiGridEnv):
         size: int | None = 8,
         base_grid: np.ndarray | None = None,
         num_goals: int | None = 3,
-        goals: list[tuple[int, int]] | None = [],
+        goals: list[tuple[int, int]] | None = None,
         goal: tuple[int, int] | None = None,
         agents_start_pos: list[tuple[int, int]] | None = None,
         agents_start_dir: list[int] | None = None,  
@@ -207,7 +207,10 @@ class AGREnv(MultiGridEnv):
         else:
             self.hidden_cost = np.ones((size, size))
 
-        self.goals = goals
+        if goals is None:
+            self.goals = []
+        else:
+            self.goals = goals
         self.goal = goal
 
         super().__init__(
@@ -278,15 +281,21 @@ class AGREnv(MultiGridEnv):
         """
         Generate a list of goal positions in the grid
         """
+        if self.goal is None:
+
+            for i in range(num_goals):
+                obj = Goal(IDX_TO_COLOR[i])  # Use the color from the mapping
+                pos = self.place_obj(obj)
+                self.goals.append(pos)
+            
+            # Select a random goal as the true goal
+            self.goal = self.goals[np.random.randint(0, len(self.goals))]
+        else:
+            for i in range(num_goals):
+                pos = self.goals[i]
+                self.grid.set(pos[0], pos[1], Goal(IDX_TO_COLOR[i]))  # Place the goal in the grid
+
         
-
-        for i in range(num_goals):
-            obj = Goal(IDX_TO_COLOR[i])  # Use the color from the mapping
-            pos = self.place_obj(obj)
-            self.goals.append(pos)
-
-        # Select a random goal as the true goal
-        self.goal = self.goals[np.random.randint(0, len(self.goals))]
 
 
     def generate_base_grid(self, size):
@@ -390,9 +399,10 @@ class AGREnv(MultiGridEnv):
             agent.state.pos = self.agents_start_pos[i]
             agent.state.dir = self.agents_start_dir[i]
 
-        # Generate Goals
-        if self.goal is None:
-            self._gen_goals(self.num_goals)
+
+        self._gen_goals(self.num_goals)
+
+            
 
     def mod_obs(self, obs):
         obs_observations = obs[0]
@@ -447,7 +457,7 @@ class AGREnv(MultiGridEnv):
             Termination dictionary to be updated
         """
         # If the agent is the target, it has completed its mission
-        if agent == self.target:
+        if agent == self.target and agent.state.pos == self.goal:
             agent.state.terminated = True # terminate this agent only
             terminations[agent.index] = True
 
