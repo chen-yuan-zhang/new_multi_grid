@@ -1,0 +1,44 @@
+hydra:
+  launcher:
+    n_jobs: 1
+  sweeper:
+    params:
+      ++data.length: 50, 100, 200, 500
+      # ++model.num_layers: 8,16
+      # ++model.observation_window: 5,7,11,13,15,21
+      # ++model.scheduler: null,cosine
+      # ++model.positional_encoding: false,true
+
+experiment: basicDiscrete
+note: null
+replicate_experiment: null
+logger:
+  type: wandb
+  folder_path: logs
+  wandb_project: gr_pursuer
+
+env:
+  size: 64
+  hidden_cost_type: distance
+  goal_gt: false
+
+data:
+  length: 50
+  layout_shuffle: false
+  path: gr_pursuer/data/{}_{}_{}_{}
+
+model:
+  save_path: gr_pursuer/neural/models
+  tmp_epoch_save_path: gr_pursuer/neural/tmp_models
+  positional_encoding: false
+  observation_window: 17
+  warmup_steps: 100
+  scheduler: null
+  nepochs: 10
+  lr: 0.0001
+  num_layers: 4
+  num_heads: 4
+  load_model: null
+
+defaults:
+  - override hydra/launcher: joblib

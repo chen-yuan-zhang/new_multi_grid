@@ -1,0 +1,21 @@
+{
+    "grid_size": 8,
+    "agents_start_pos": [
+        [
+            6,
+            1
+        ],
+        [
+            6,
+            4
+        ]
+    ],
+    "agents_start_dir": [
+        1,
+        1
+    ],
+    "base_grid": "[[1 1 1 1 1 1 1 1]\n [1 0 0 0 0 0 0 1]\n [1 0 0 0 0 0 1 1]\n [1 0 1 0 0 0 0 1]\n [1 0 1 1 0 0 0 1]\n [1 0 0 0 0 0 0 1]\n [1 0 0 0 0 0 0 1]\n [1 1 1 1 1 1 1 1]]",
+    "num_goals": 3,
+    "initial_distance": 3.0,
+    "enable_hidden_cost": false
+}
