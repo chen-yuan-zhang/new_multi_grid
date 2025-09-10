@@ -56,7 +56,7 @@ def get_path(label):
     return path
 
 # --- 把你的 astar 改成“开门版” ---
-def astar_open(pos_state, target, env, cost=None, heuristic=heuristic_manhattan, max_iter=None):
+def astar_open(pos_state, target, env, cost=None, heuristic=heuristic_manhattan, max_iter=None,version = None):
     """
     目标：打开位于 target=(tx,ty) 的门。默认我们已持有对应钥匙。
     成功条件：产生一次 Action.toggle（即 current.pos_state[2] == True）。
@@ -99,7 +99,7 @@ def astar_open(pos_state, target, env, cost=None, heuristic=heuristic_manhattan,
         visited[key] = current.g
 
         # 使用“开门版” successor；传入目标门坐标
-        successors = get_successor_open(env, current.pos_state, target_door_pos=door_pos)
+        successors = get_successor_open(env, current.pos_state, target_door_pos=door_pos,version=version)
         for action, succ in successors:
             next_pos, next_dir, next_opened = succ
             next_tile = Tile(*next_pos)
@@ -122,15 +122,14 @@ def astar_open(pos_state, target, env, cost=None, heuristic=heuristic_manhattan,
 
 def astar_key(pos_state, target, env, cost=None,
               heuristic=heuristic_manhattan, max_iter=None,
-              agent_idx=1, ActionEnum=Action):
+              agent_idx=1, ActionEnum=Action, version = None):
     # target: (tx,ty) 或 Tile，统一成 Tile
     target = Tile(*target) if not hasattr(target, "i") else target
     (pos, d) = pos_state
     # ---- 前缀：若当前手里有钥匙，先丢掉 ----
     prefix = []
     carried = getattr(getattr(env.agents[agent_idx], "state", None), "_carried_obj", None)
-    if carried is not None:
-        # 你的执行层会识别这个动作；第二个元素占位，保持和你的 path 元素结构一致
+    if (isinstance(carried, np.ndarray) and carried.item()):
         prefix.append((ActionEnum.drop, None))
 
     # 规划从“未持钥匙”的状态到目标钥匙坐标（拿到即到达）
@@ -152,7 +151,7 @@ def astar_key(pos_state, target, env, cost=None,
 
         if max_iter and it > max_iter:
             # 只返回前缀（至少把手里的钥匙丢了）
-            return prefix if prefix else None
+            return [(None,0)] + [prefix] if prefix else None
 
         key = (tuple(current.pos_state[0]), int(current.pos_state[1]), bool(current.pos_state[2]))
         if key in visited and visited[key] <= current.g:
@@ -161,7 +160,7 @@ def astar_key(pos_state, target, env, cost=None,
         visited[key] = current.g
 
         # 使用三元版 successor；传入目标钥匙坐标
-        successors = get_successor(env, current.pos_state, target_key_pos=(target.i, target.j))
+        successors = get_successor(env, current.pos_state, target_key_pos=(target.i, target.j),version=version)
 
         for action, succ in successors:
             next_pos, next_dir, next_has_key = succ
@@ -183,7 +182,7 @@ def astar_key(pos_state, target, env, cost=None,
         path = get_path(found)  # 你的 get_path 返回 [(action, ...), ...]
         return ([path[0]] + prefix + path[1:]) if prefix else path
     # 没找到路：至少把手里的钥匙丢掉
-    return prefix if prefix else None
+    return [(None,0)] + prefix if prefix else None
     
 def _is_wall(env, p):
     return getattr(env, "base_grid", None) is not None and env.base_grid[p[0], p[1]] == 2
@@ -192,7 +191,7 @@ def _is_wall(env, p):
 def _is_closed_door(obj):
     return (obj is not None) and hasattr(obj, "is_open") and (not obj.is_open)
     
-def execute_action(pos_state, action, env):
+def execute_action(pos_state, action, env,version = None):
     """
     Execute an action in the environment.
     
@@ -222,9 +221,10 @@ def execute_action(pos_state, action, env):
         if not (0 <= new_pos[0] < env.width and 0 <= new_pos[1] < env.height):
             return False, (pos, dir)
         # walls block movement
-        if env.base_grid[new_pos[0], new_pos[1]] == 2: # wall = 2
-            return False, (pos, dir)
-        # everything except walls and CLOSED doors is walkable
+        if version == None:
+            if env.base_grid[new_pos[0], new_pos[1]] == 2: # wall = 2
+                return False, (pos, dir)
+            # everything except walls and CLOSED doors is walkable
         obj = env.grid.get(*new_pos)
         if _is_closed_door(obj):
             return False, (pos, dir)
@@ -345,7 +345,7 @@ def _front(pos, d):
 def _is_door(obj):
     return (obj is not None) and hasattr(obj, "is_open")  # duck typing
 
-def get_successor_open(env, pos_state, target_door_pos):
+def get_successor_open(env, pos_state, target_door_pos,version = None):
     """
     生成后继（用于“开门”子目标的 A*）。
     pos_state = ((x,y), dir, opened)
@@ -359,7 +359,7 @@ def get_successor_open(env, pos_state, target_door_pos):
 
     # 基本动作（不改 env）
     for action in (Action.left, Action.right, Action.forward, Action.stay, Action.drop):
-        ok, succ = execute_action((pos, d), action, env)
+        ok, succ = execute_action((pos, d), action, env,version)
         if ok:
             successors.append((action, (succ[0], succ[1], opened)))
 
@@ -373,7 +373,7 @@ def get_successor_open(env, pos_state, target_door_pos):
 
     return successors
 
-def get_successor(env, pos_state, target_key_pos):
+def get_successor(env, pos_state, target_key_pos,version = None):
     """
     三元状态拓展：pos_state = ((x,y), dir, has_key)
     - 只用 left/right/forward/stay 通过 execute_action 生成后继（不改 env）
@@ -386,7 +386,7 @@ def get_successor(env, pos_state, target_key_pos):
 
     # 仅使用不会改变 env 的基本动作
     for action in (Action.left, Action.right, Action.forward, Action.stay, Action.drop):
-        ok, succ = execute_action((pos, d), action, env)
+        ok, succ = execute_action((pos, d), action, env,version)
         if ok:
             successors.append((action, (succ[0], succ[1], has_key)))
 

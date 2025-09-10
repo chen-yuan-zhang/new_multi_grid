@@ -1,5 +1,7 @@
 from .base import BaseAgent
 from ..new_astar import astar, get_successor, execute_action, get_obs_successor, get_reverse_successor
+from ..lock_astar import astar_key,astar_open,get_successor
+
 import matplotlib.pyplot as plt
 
 import math
@@ -17,6 +19,142 @@ from copy import deepcopy
 TRACK = 0
 MOVE2GOAL = 1
 BETA = 1
+
+
+class LockObserver(BaseAgent):
+
+    def __init__(self, env) -> None:
+
+        super().__init__(env.target)
+        self.env = env
+        self.goal = env.goal
+        self.goals = env.goals
+        self.plans = env.plans
+        self.goal_room = env.goal_room
+        self.agent = env.observer
+        self.path = None
+
+        self.index = 0
+        self.enable_hidden_cost = env.enable_hidden_cost
+        if self.enable_hidden_cost:
+            self.hidden_cost = env.hidden_cost
+        else:
+            self.hidden_cost = np.ones((env.width, env.height), dtype=np.float32)
+
+
+    def compute_action(self, obs):
+        # -------- read current real pose --------
+        pos = self.agent.state.pos
+        dir = self.agent.state.dir
+    
+        # -------- one-time runtime init --------
+        if not hasattr(self, "_rt_inited") or not getattr(self, "_rt_inited"):
+            events = list(self.plans.get(self.goal_room, []))  # actor plan
+    
+            # group events by color in appearance order
+            grouped, order = {}, []
+            for evt in events:
+                color = evt.get("key") or evt.get("color")
+                if color not in grouped:
+                    grouped[color] = []
+                    order.append(color)
+                grouped[color].append(evt)
+    
+            # --- NEW: if only 0/1 unique colors -> no real need for Observer
+            unique_colors = [c for c in order if c is not None]
+            self._observer_idle = (len(unique_colors) <= 1)
+    
+            # build reversed event list for Observer
+            reversed_events = []
+            for color in reversed(order):
+                reversed_events.extend(grouped[color])
+    
+            # If idle, empty the plan so Observer does nothing
+            self.plan_events = [] if self._observer_idle else reversed_events
+            self.plan_idx    = 0
+            self.final_phase = False
+            self.held_color  = None
+            self._rt_inited  = True
+    
+            # Debug prints (optional)
+            # print("[Observer Init] actor plan ->", [e.get("key") or e.get("color") for e in events])
+            # print("[Observer Init] observer plan ->", [e.get("key") or e.get("color") for e in self.plan_events])
+            # print("[Observer Init] idle:", self._observer_idle)
+    
+        # If Observer is marked idle, just stay
+        if getattr(self, "_observer_idle", False):
+            return Action.stay
+    
+        # -------- helpers (MiniGrid/MultiGrid-style) --------
+        def _tile_at(xy):
+            grid = getattr(self.env, "grid", None)
+            if grid is None or xy is None:
+                return None
+            x, y = int(xy[0]), int(xy[1])
+            try:
+                return grid.get(x, y)
+            except Exception:
+                return None
+    
+        def _door_is_open(xy):
+            t = _tile_at(xy)
+            return (getattr(t, "type", None) == "door") and bool(getattr(t, "is_open", False))
+    
+        def _pickup_color_if_on_key():
+            """Update held_color by checking what the agent is actually carrying."""
+            carried = getattr(getattr(self.agent, "state", None), "_carried_obj", None)
+            if isinstance(carried, np.ndarray):
+                try:
+                    carried = carried.item()
+                except Exception:
+                    carried = None
+            if carried is None:
+                self.held_color = None
+            else:
+                self.held_color = getattr(carried, "color", None)
+    
+        _pickup_color_if_on_key()
+    
+        path = None
+        # print("plan_idx:", self.plan_idx)
+    
+        if (not self.final_phase) and self.plan_idx < len(self.plan_events):
+            evt = self.plan_events[self.plan_idx]
+            ety = evt.get("type")
+            exy = tuple(evt.get("pos", {}).get("value")) if evt.get("pos") else None
+    
+            if ety == "pickup" and exy is not None:
+                target_color = evt.get("key") or evt.get("color")
+                if target_color is not None and self.held_color == target_color:
+                    # already have the key -> skip this pickup event
+                    self.plan_idx += 1
+                    path = None
+                else:
+                    # plan to the key position (online)
+                    path = astar_key((pos, dir), exy, self.env, self.hidden_cost,agent_idx = 0,version = True)
+    
+            elif ety == "open" and exy is not None:
+                if _door_is_open(exy):
+                    self.plan_idx += 1
+                    path = None
+                else:
+                    path = astar_open((pos, dir), exy, self.env, self.hidden_cost,version = True)
+        else:
+            # no more events: final phase -> go straight to goal
+            self.final_phase = True
+            path = astar((pos, dir), self.goal, self.env, self.hidden_cost)
+    
+        # -------- safe fallback --------
+        if not path or len(path) == 0:
+            return Action.stay
+    
+        # -------- execute ONLY ONE action; replan next step --------
+        # Some planners put current node at index 0. Take the first valid action safely.
+        print(path)
+        step_idx = 1 if len(path) > 1 else 0
+        act = path[step_idx][0]  # path like [(action, ...), ...]
+        return act
+
 
 class Observer(BaseAgent):
 

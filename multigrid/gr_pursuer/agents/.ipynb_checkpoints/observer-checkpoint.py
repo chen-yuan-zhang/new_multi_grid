@@ -541,7 +541,7 @@ class MCTSNode:
         # Sample a goal based on the normalized probability distribution
         sampled_goal = np.random.choice(len(goals), p=probabilities)
         return goals[sampled_goal]
-            
+
     def update_goal_belief(self, actor_belief):
         new_goal_belief = {}
         for goal in self.goal_belief:
