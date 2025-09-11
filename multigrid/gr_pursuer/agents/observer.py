@@ -427,6 +427,7 @@ def update_actor_belief(actor_belief, goals, env, dist_matrix, beta = BETA):
             if pos[0] == goal[0] and pos[1] == goal[1]:
                 successors = list(filter(lambda x: x[0] == Action.stay, successors))
 
+            # For sukai: tran_probs[succ]  = neural_predict(current_state, goal, behaviour_type)
             for action, succ in successors:
 
                 next_pos, next_dir = succ
@@ -436,6 +437,7 @@ def update_actor_belief(actor_belief, goals, env, dist_matrix, beta = BETA):
                 if (succ, goal) in dist_matrix:
                     tran_probs[succ] = math.exp(- beta * (1 + dist_matrix[(succ, goal)]))
 
+                    
                 else:
                     print("should not happen")
                     input()
