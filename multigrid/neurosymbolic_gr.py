@@ -30,6 +30,7 @@ def simple_interaction_demo():
         actions = {0: observer_action, 1: actor_action}
         
         # Step the environment
+        # For sukai
         next_obs, rewards, terminations, truncations, infos = env.step(actions)
         
         # Print basic information
