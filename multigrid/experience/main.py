@@ -12,7 +12,9 @@ import json
 
 def run(base_grid=None, goals=None, goal = None, hidden_cost=None, observer_pos=None, target_pos=None, TargetAgent_actions = None, observer_dir=None, target_dir=None, render_mode="human"):
     agents_start_pos = [observer_pos, target_pos]
-    agents_start_dir = [observer_dir, target_dir] 
+    agents_start_dir = [observer_dir, target_dir]
+    print(agents_start_pos,type(agents_start_pos))
+
     env = AGREnv(base_grid=base_grid, 
                      goals=goals, hidden_cost=hidden_cost, goal = goal,
                      enable_hidden_cost=True, 
@@ -69,8 +71,6 @@ def main(dataset=None):
             target_dir = scenario["target_dir"]
             actions = [Action(v) for v in json.loads(scenario["all_actions"]) ] 
             goal = eval(scenario["goal"])
-            
-          
             flag, first_step = run(base_grid=base_grid, goals=goals, goal = goal,
                                    hidden_cost=hidden_cost, observer_pos=observer_pos, target_pos=target_pos, 
                                    observer_dir=observer_dir, target_dir=target_dir, 

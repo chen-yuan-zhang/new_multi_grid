@@ -144,6 +144,10 @@ def execute_action(pos_state, action, env):
         # walls block movement
         if env.base_grid[new_pos[0], new_pos[1]] == 2: # wall = 2
             return False, (pos, dir)
+        obj = env.grid.get(new_pos[0], new_pos[1])
+        if obj is not None and obj.type == "door":
+            if not obj.is_open:
+                return False, (pos, dir)
         # open door / empty / key / box / etc. -> pass
         return True, (new_pos, dir)
     

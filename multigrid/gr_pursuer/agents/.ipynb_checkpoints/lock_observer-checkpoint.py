@@ -62,7 +62,7 @@ class LockObserver(BaseAgent):
     
             # --- NEW: if only 0/1 unique colors -> no real need for Observer
             unique_colors = [c for c in order if c is not None]
-            self._observer_idle = (len(unique_colors) <= 1)
+            self._observer_idle = (len(unique_colors) <= 0)
     
             # build reversed event list for Observer
             reversed_events = []
@@ -75,11 +75,7 @@ class LockObserver(BaseAgent):
             self.final_phase = False
             self.held_color  = None
             self._rt_inited  = True
-    
-            # Debug prints (optional)
-            # print("[Observer Init] actor plan ->", [e.get("key") or e.get("color") for e in events])
-            # print("[Observer Init] observer plan ->", [e.get("key") or e.get("color") for e in self.plan_events])
-            # print("[Observer Init] idle:", self._observer_idle)
+
     
         # If Observer is marked idle, just stay
         if getattr(self, "_observer_idle", False):

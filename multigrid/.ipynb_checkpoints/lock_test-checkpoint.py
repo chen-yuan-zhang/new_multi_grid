@@ -13,7 +13,7 @@ ObserverAgent = LockObserver(env)#BeliefUpdateObserver(env)
 while not env.unwrapped.is_done():
    # this is where you would insert your policy / policies
     actions = {agent.index: agent.action_space.sample() for agent in env.unwrapped.agents}
-    actions[1] = TargetAgent.compute_action(observations)
+    actions[1] = TargetAgent.compute_action(observations,env)
     #actions[0] = ObserverAgent.compute_action(observations[0])
     actions[0] = ObserverAgent.compute_action(observations)
 

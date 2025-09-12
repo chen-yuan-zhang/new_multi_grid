@@ -198,36 +198,36 @@ def print_plan(target_rid, events):
             print(f"{i:02d}. OPEN     door[eid={evt['eid']}] color={evt['color']}  {evt['from']}->{evt['to']}  pos[{pstr}]")
 
 
-NEIGHBOURS = (((1,0), (-1, 0), (0, 1), (0, -1)),((-1, 0), (-1, 1), (0, 2), (1, 2), (2, 1), (2, 0), (0, -1), (1, -1)))
+# NEIGHBOURS = (((1,0), (-1, 0), (0, 1), (0, -1)),((-1, 0), (-1, 1), (0, 2), (1, 2), (2, 1), (2, 0), (0, -1), (1, -1)))
 
-def get_neighbours(cell, size, cell_size):
-    """
-    Get the neighboring cells for a given cell in a grid.
+# def get_neighbours(cell, size, cell_size):
+#     """
+#     Get the neighboring cells for a given cell in a grid.
     
-    Parameters
-    ----------
-    cell : tuple[int, int]
-        The current cell position
-    size : int
-        The size of the grid
-    cell_size : int
-        The size of each cell
+#     Parameters
+#     ----------
+#     cell : tuple[int, int]
+#         The current cell position
+#     size : int
+#         The size of the grid
+#     cell_size : int
+#         The size of each cell
         
-    Returns
-    -------
-    list[tuple[int, int]]
-        List of neighboring cell positions
-    """
-    x, y = cell
-    neighbors = []
+#     Returns
+#     -------
+#     list[tuple[int, int]]
+#         List of neighboring cell positions
+#     """
+#     x, y = cell
+#     neighbors = []
     
-    # Check all four directions
-    for dx, dy in NEIGHBOURS[cell_size - 1]:
-        new_x, new_y = x + dx, y + dy
-        if 0 <= new_x < size and 0 <= new_y < size:
-            neighbors.append((new_x, new_y))
+#     # Check all four directions
+#     for dx, dy in NEIGHBOURS[cell_size - 1]:
+#         new_x, new_y = x + dx, y + dy
+#         if 0 <= new_x < size and 0 <= new_y < size:
+#             neighbors.append((new_x, new_y))
     
-    return neighbors
+#     return neighbors
 
 class AGRlocked(RoomGrid):
     """
