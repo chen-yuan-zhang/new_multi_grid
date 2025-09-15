@@ -9,6 +9,16 @@ from multigrid.gr_pursuer.agents.target import AstarTarget
 import numpy as np
 import json
 
+def set_all_seed(seed):
+    random.seed(seed)
+    np.random.seed(seed)
+    # torch.manual_seed(seed)
+    # if torch.cuda.is_available():
+    #     torch.cuda.manual_seed_all(seed)
+    
+SEED = 123
+set_all_seed(SEED)
+
 
 sizes = [10,20,30]
 initial_distances = [3, 5, 7]

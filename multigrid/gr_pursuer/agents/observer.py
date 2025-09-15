@@ -13,6 +13,9 @@ import os
 from collections import deque
 from copy import deepcopy
 
+from .neuro_predictor import neuro_predict
+
+
 # MODES
 TRACK = 0
 MOVE2GOAL = 1
@@ -427,7 +430,22 @@ def update_actor_belief(actor_belief, goals, env, dist_matrix, beta = BETA):
             if pos[0] == goal[0] and pos[1] == goal[1]:
                 successors = list(filter(lambda x: x[0] == Action.stay, successors))
 
-            # For sukai: tran_probs[succ]  = neural_predict(current_state, goal, behaviour_type)
+            # ---- For sukai: tran_probs[succ]  = neural_predict(current_state, goal, behaviour_type)
+            # * Dummy case for enumerate Behavior Type
+            # ! make sure run `source env.sh` before running 
+            # ! make sure run this code in ansr-nectar-2 server 
+            BEHAVIOR_TYPE_LIST = [0, 1, 2, 3]
+            
+            behaviour_type = np.random.choice(BEHAVIOR_TYPE_LIST, p=[0.25, 0.25, 0.25, 0.25])
+            
+            tran_probs = neuro_predict(env, goal, behaviour_type, successors, pos_state)
+            
+            # ! Note that the deep learning model cause the processing time to be long, you may want to shorten size of testing environments. it takes approx 2 mins to run 1 episode. 
+            
+            # >>> tran_probs
+            # >>> {'stay': np.float32(8.090865e-09), 'left': np.float32(0.46875), 'forward': np.float32(0.53125), 'right': np.float32(1.1995435e-06)}
+            
+            # ---- End of sukai section ----
             for action, succ in successors:
 
                 next_pos, next_dir = succ

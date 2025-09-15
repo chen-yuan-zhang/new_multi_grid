@@ -1,0 +1,14 @@
+# requirement for running deep learning model
+
+minigrid
+tqdm
+git+https://github.com/chen-yuan-zhang/new_multi_grid.git
+jsonlines
+matplotlib
+opencv-python
+pandas
+qwen-vl-utils
+wandb
+"unsloth[cu124-torch240] @ git+https://github.com/unslothai/unsloth.git"
+'torchao==0.11.0'
+loguru
