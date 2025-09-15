@@ -237,17 +237,20 @@ def neuro_predict(env, goal, behavior_type, successors, pos_state):
         # process successor info 
         successor_text_dict = dict()
         for action, succ in successors:
-            successor_text_dict[action.value] = succ
-        
+            successor_text_dict[action.name] = succ
         for action_id, action in enumerate(ACTION_LABELS):
             if action == agent_dir_text: # means forward 
-                tran_probs_dict['forward'] = action_probs[action_id]
+                if successor_text_dict.get('forward') is not None:
+                    tran_probs_dict[successor_text_dict['forward']] = action_probs[action_id]
             elif (agent_dir + 1) % 4 == action_id: # means right 
-                tran_probs_dict['right'] = action_probs[action_id]
+                if successor_text_dict.get('right') is not None:
+                    tran_probs_dict[successor_text_dict['right']] = action_probs[action_id]
             elif (agent_dir - 1) % 4 == action_id: # means left
-                tran_probs_dict['left'] = action_probs[action_id]
-            elif (agent_dir + 2) % 4 == action_id: # means stay 
-                tran_probs_dict['stay'] = action_probs[action_id]
+                if successor_text_dict.get('left') is not None:
+                    tran_probs_dict[successor_text_dict['left']] = action_probs[action_id]
+            elif (agent_dir + 2) % 4 == action_id: # means stay
+                if successor_text_dict.get('stay') is not None:
+                    tran_probs_dict[successor_text_dict['stay']] = action_probs[action_id]
             else:
                 raise ValueError("Invalid action direction mapping.")
             

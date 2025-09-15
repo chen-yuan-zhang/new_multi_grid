@@ -81,6 +81,9 @@ def main(dataset=None):
             scenarios.loc[idx, "first_step"] = first_step
             succ_count += 1 if flag else 0
             step_count += first_step if flag else 0
+            
+            # temp save
+            scenarios.to_csv("results_2_temp.csv", index=False)
         print(f"Success rate: {succ_count}/{len(scenarios)}")
         print(f"Average first step: {step_count/succ_count}")
         scenarios.to_csv("results_2.csv", index=False)

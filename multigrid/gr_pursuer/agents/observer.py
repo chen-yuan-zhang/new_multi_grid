@@ -438,6 +438,14 @@ def update_actor_belief(actor_belief, goals, env, dist_matrix, beta = BETA):
             
             behaviour_type = np.random.choice(BEHAVIOR_TYPE_LIST, p=[0.25, 0.25, 0.25, 0.25])
             
+            # reformat successor 
+            new_successors = []
+            for action, succ in successors:
+                next_pos, next_dir = succ
+                new_successors.append((action, ((next_pos[0], next_pos[1]), next_dir)))
+                
+            successors = new_successors
+            
             tran_probs = neuro_predict(env, goal, behaviour_type, successors, pos_state)
             
             # ! Note that the deep learning model cause the processing time to be long, you may want to shorten size of testing environments. it takes approx 2 mins to run 1 episode. 
@@ -446,21 +454,22 @@ def update_actor_belief(actor_belief, goals, env, dist_matrix, beta = BETA):
             # >>> {'stay': np.float32(8.090865e-09), 'left': np.float32(0.46875), 'forward': np.float32(0.53125), 'right': np.float32(1.1995435e-06)}
             
             # ---- End of sukai section ----
-            for action, succ in successors:
+            # --- Comment out to test deep learning model ---
+            # for action, succ in successors:
 
-                next_pos, next_dir = succ
+            #     next_pos, next_dir = succ
 
-                succ = ((next_pos[0], next_pos[1]), next_dir)
+            #     succ = ((next_pos[0], next_pos[1]), next_dir)
 
-                if (succ, goal) in dist_matrix:
-                    tran_probs[succ] = math.exp(- beta * (1 + dist_matrix[(succ, goal)]))
+            #     if (succ, goal) in dist_matrix:
+            #         tran_probs[succ] = math.exp(- beta * (1 + dist_matrix[(succ, goal)]))
 
                     
-                else:
-                    print("should not happen")
-                    input()
-                    tran_probs[succ] = 0
-
+            #     else:
+            #         print("should not happen")
+            #         input()
+            #         tran_probs[succ] = 0
+            # --- End of comment out ---
     
             total_prob = sum(tran_probs.values())
             if total_prob > 0:
