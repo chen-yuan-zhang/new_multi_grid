@@ -58,6 +58,7 @@ class LockTarget(BaseAgent):
     def compute_action(self, obs,env):
         pos = self.env.target.state.pos
         dir = self.env.target.state.dir
+        print()
     
         # 如果没有事件了 → 直接去终点
         while self.index < len(self.plan_events):

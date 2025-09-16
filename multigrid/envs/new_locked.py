@@ -786,6 +786,7 @@ class AGRlocked(RoomGrid):
         # Add observer's position and direction to the observations
         obs_observations["observer_pos"] = self.observer.state.pos
         obs_observations["observer_dir"] = self.observer.state.dir
+
         # Add target's position and direction to the actor's observations
         obs[1]["target_pos"] = self.target.state.pos
         obs[1]["target_dir"] = self.target.state.dir

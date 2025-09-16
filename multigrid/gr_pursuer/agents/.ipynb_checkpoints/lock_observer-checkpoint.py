@@ -1,6 +1,6 @@
 from .base import BaseAgent
 from ..new_astar import astar, get_successor, execute_action, get_obs_successor, get_reverse_successor
-from ..lock_astar import astar_key,astar_open,get_successor
+#from ..lock_astar import astar_key,astar_open,get_successor
 
 import matplotlib.pyplot as plt
 
@@ -21,253 +21,6 @@ MOVE2GOAL = 1
 BETA = 1
 
 
-class LockObserver(BaseAgent):
-
-    def __init__(self, env) -> None:
-
-        super().__init__(env.target)
-        self.env = env
-        self.goal = env.goal
-        self.goals = env.goals
-        self.plans = env.plans
-        self.goal_room = env.goal_room
-        self.agent = env.observer
-        self.path = None
-
-        self.index = 0
-        self.enable_hidden_cost = env.enable_hidden_cost
-        if self.enable_hidden_cost:
-            self.hidden_cost = env.hidden_cost
-        else:
-            self.hidden_cost = np.ones((env.width, env.height), dtype=np.float32)
-
-
-    def compute_action(self, obs):
-        # -------- read current real pose --------
-        pos = self.agent.state.pos
-        dir = self.agent.state.dir
-    
-        # -------- one-time runtime init --------
-        if not hasattr(self, "_rt_inited") or not getattr(self, "_rt_inited"):
-            events = list(self.plans.get(self.goal_room, []))  # actor plan
-    
-            # group events by color in appearance order
-            grouped, order = {}, []
-            for evt in events:
-                color = evt.get("key") or evt.get("color")
-                if color not in grouped:
-                    grouped[color] = []
-                    order.append(color)
-                grouped[color].append(evt)
-    
-            # --- NEW: if only 0/1 unique colors -> no real need for Observer
-            unique_colors = [c for c in order if c is not None]
-            self._observer_idle = (len(unique_colors) <= 0)
-    
-            # build reversed event list for Observer
-            reversed_events = []
-            for color in reversed(order):
-                reversed_events.extend(grouped[color])
-    
-            # If idle, empty the plan so Observer does nothing
-            self.plan_events = [] if self._observer_idle else reversed_events
-            self.plan_idx    = 0
-            self.final_phase = False
-            self.held_color  = None
-            self._rt_inited  = True
-
-    
-        # If Observer is marked idle, just stay
-        if getattr(self, "_observer_idle", False):
-            return Action.stay
-    
-        # -------- helpers (MiniGrid/MultiGrid-style) --------
-        def _tile_at(xy):
-            grid = getattr(self.env, "grid", None)
-            if grid is None or xy is None:
-                return None
-            x, y = int(xy[0]), int(xy[1])
-            try:
-                return grid.get(x, y)
-            except Exception:
-                return None
-    
-        def _door_is_open(xy):
-            t = _tile_at(xy)
-            return (getattr(t, "type", None) == "door") and bool(getattr(t, "is_open", False))
-    
-        def _pickup_color_if_on_key():
-            """Update held_color by checking what the agent is actually carrying."""
-            carried = getattr(getattr(self.agent, "state", None), "_carried_obj", None)
-            if isinstance(carried, np.ndarray):
-                try:
-                    carried = carried.item()
-                except Exception:
-                    carried = None
-            if carried is None:
-                self.held_color = None
-            else:
-                self.held_color = getattr(carried, "color", None)
-    
-        _pickup_color_if_on_key()
-    
-        path = None
-        # print("plan_idx:", self.plan_idx)
-    
-        if (not self.final_phase) and self.plan_idx < len(self.plan_events):
-            evt = self.plan_events[self.plan_idx]
-            ety = evt.get("type")
-            exy = tuple(evt.get("pos", {}).get("value")) if evt.get("pos") else None
-    
-            if ety == "pickup" and exy is not None:
-                target_color = evt.get("key") or evt.get("color")
-                if target_color is not None and self.held_color == target_color:
-                    # already have the key -> skip this pickup event
-                    self.plan_idx += 1
-                    path = None
-                else:
-                    # plan to the key position (online)
-                    path = astar_key((pos, dir), exy, self.env, self.hidden_cost,agent_idx = 0,version = True)
-    
-            elif ety == "open" and exy is not None:
-                if _door_is_open(exy):
-                    self.plan_idx += 1
-                    path = None
-                else:
-                    path = astar_open((pos, dir), exy, self.env, self.hidden_cost,version = True)
-        else:
-            # no more events: final phase -> go straight to goal
-            self.final_phase = True
-            path = astar((pos, dir), self.goal, self.env, self.hidden_cost)
-    
-        # -------- safe fallback --------
-        if not path or len(path) == 0:
-            return Action.stay
-    
-        # -------- execute ONLY ONE action; replan next step --------
-        # Some planners put current node at index 0. Take the first valid action safely.
-        print(path)
-        step_idx = 1 if len(path) > 1 else 0
-        act = path[step_idx][0]  # path like [(action, ...), ...]
-        return act
-
-
-class Observer(BaseAgent):
-
-    def __init__(self, env):
-
-        super().__init__(env.observer)
-
-        self.agent.name = "Observer"
-        self.goals = env.goals
-        self.goal_costs = None
-        self.start = None
-        self.prob_dict = None
-        self.agent.can_overlap = True
-        self.grid = env.base_grid
-        self.env = env
-        self.start = (env.observer.state.pos,env.observer.state.dir)
-        self.goal_belief = { g:1/len(self.goals) for g in self.goals}
-
-        self.step = -1
-        self.target_observations = []
-
-        self.infer_goal = None
-        self.mode = TRACK
-
-        self.agent.reported_goal = None
-
-    def compute_gr(self, evader_pos, evader_dir,cost):
-        current_dis = len(astar(self.start, evader_pos, self.env,cost)) - 1
-
-        probs = []
-        for goal in self.goals:
-            opt_cost = len(astar(self.start, goal, self.env,cost)) - 1
-            real_cost = current_dis + len(astar((evader_pos,evader_dir), goal, self.env,cost)) - 1
-            prob = np.exp(-(real_cost - opt_cost))/(1+np.exp(-(real_cost - opt_cost)))
-            probs.append(prob)
-
-        total = sum(probs)
-        normalized_probs = [p / total for p in probs]
-
-        largest_index = np.argmax(normalized_probs)
-        infer_goal = self.goals[largest_index]
-
-        probs = { g:p for g, p in zip(self.goals, normalized_probs)}
-
-        return infer_goal, probs
-    
-    def compute_target_paths(self, target_pos,target_dir, cost):
-        paths = []
-        costs = []
-
-        for goal in self.goals:
-            path = astar((target_pos,target_dir), goal, self.env,cost)
-            costs.append(len(path))
-
-        return paths, costs
-
-    def compute_action(self, obs):
-
-        self.step += 1
-        pos = list(obs['observer_pos'])
-        dir = np.array(obs['observer_dir'])
-        dir_vec = DIR_TO_VEC[dir]
-
-        cost = np.ones((self.grid.shape))
-
-
-        # STACK OBSERVATIONS
-        if 10 in obs["image"]: # Check if the target is in the image
-            target_pos = obs["target_pos"]
-            target_dir = obs["target_dir"]
-            self.infer_goal, self.prob_dict = self.compute_gr(target_pos, target_dir,cost)
-            self.goal_belief = self.prob_dict
-            target_paths, target_costs = self.compute_target_paths(target_pos, target_dir,cost)
-
-            self.target_observations.append((self.step, target_pos, target_dir, target_paths, target_costs))
-
-            if len(self.target_observations) > 3 and max((self.prob_dict).values())>0.8:
-                max_idx = np.argmax((self.prob_dict).values())
-                self.agent.reported_goal = self.goals[max_idx]
-                
-                return Action.done
-
-
-        path = None
-        dir_vec_ = None
-        # EXE MODE BEHAVIOUR
-        if self.mode == TRACK:
-            if len(self.target_observations) > 0:
-                last_target_obs = self.target_observations[-1]
-                step, target_pos, target_dir, target_paths, target_costs = last_target_obs
-                dir_vec_ = DIR_TO_VEC[target_dir]
-                path = astar((pos,dir), target_pos, self.env,cost)
-            else:
-                print("Target: Lost Track")
-                return Action.right
-
-        # elif self.mode == MOVE2GOAL:
-        #     path = astar((pos,dir), self.infer_goal, self.env,cost)
-
-        
-        if len(path)<=1 and dir_vec_ is not None:
-            n_dir = len(DIR_TO_VEC)
-            dir_vec_curr = DIR_TO_VEC[(dir+1)%n_dir]
-
-            if (dir_vec_==dir_vec_curr).all():
-                action = Action.right
-            else:
-                action = Action.left
-
-        elif len(path)<2 or path is None:
-            print("Target: Path not processed")
-            return Action.right
-
-
-        else:            
-            action = np.array(path[1][0])     
-        return action
 
 
 
@@ -462,6 +215,7 @@ class BeliefUpdateObserver(BaseAgent):
         # Update the belief of the observer based on the observed FoV
         if "target_pos" in obs or self.pos == self.env.target.pos:
             print(self.step)
+            print(self.env.target.carrying)
             print("in view")
             target_pos = self.env.target.pos
             target_dir = self.env.target.dir # 0-3 denote east south west north respectively
@@ -476,14 +230,10 @@ class BeliefUpdateObserver(BaseAgent):
         else:
             print(self.step)
             print("not in view")
-   
             obs_shape = self.agent.observation_space['image'].shape[:-1]
             vis_mask = np.zeros_like(obs_shape, dtype=bool)
             vis_mask = (self.env.gen_obs()[0]['image'][..., 0] !=  Type.unseen.to_index()) # 0 denotes the observer
-  
-
             highlight_mask = np.zeros((self.env.width, self.env.height), dtype=bool)
-
 
             # of the agent's view area
             f_vec = self.agent.state.dir.to_vec()
@@ -797,3 +547,252 @@ def compute_entropy(goal_belief):
     entropy = -np.sum(probabilities * np.log2(probabilities + 1e-10))  # Small offset to avoid log(0)
     
     return entropy
+
+
+class LockObserver(BaseAgent):
+
+    def __init__(self, env) -> None:
+
+        super().__init__(env.target)
+        self.env = env
+        self.goal = env.goal
+        self.goals = env.goals
+        self.plans = env.plans
+        self.goal_room = env.goal_room
+        self.agent = env.observer
+        self.path = None
+
+        self.index = 0
+        self.enable_hidden_cost = env.enable_hidden_cost
+        if self.enable_hidden_cost:
+            self.hidden_cost = env.hidden_cost
+        else:
+            self.hidden_cost = np.ones((env.width, env.height), dtype=np.float32)
+
+
+    def compute_action(self, obs):
+        # -------- read current real pose --------
+        pos = self.agent.state.pos
+        dir = self.agent.state.dir
+    
+        # -------- one-time runtime init --------
+        if not hasattr(self, "_rt_inited") or not getattr(self, "_rt_inited"):
+            events = list(self.plans.get(self.goal_room, []))  # actor plan
+    
+            # group events by color in appearance order
+            grouped, order = {}, []
+            for evt in events:
+                color = evt.get("key") or evt.get("color")
+                if color not in grouped:
+                    grouped[color] = []
+                    order.append(color)
+                grouped[color].append(evt)
+    
+            # --- NEW: if only 0/1 unique colors -> no real need for Observer
+            unique_colors = [c for c in order if c is not None]
+            self._observer_idle = (len(unique_colors) <= 0)
+    
+            # build reversed event list for Observer
+            reversed_events = []
+            for color in reversed(order):
+                reversed_events.extend(grouped[color])
+    
+            # If idle, empty the plan so Observer does nothing
+            self.plan_events = [] if self._observer_idle else reversed_events
+            self.plan_idx    = 0
+            self.final_phase = False
+            self.held_color  = None
+            self._rt_inited  = True
+
+    
+        # If Observer is marked idle, just stay
+        if getattr(self, "_observer_idle", False):
+            return Action.stay
+    
+        # -------- helpers (MiniGrid/MultiGrid-style) --------
+        def _tile_at(xy):
+            grid = getattr(self.env, "grid", None)
+            if grid is None or xy is None:
+                return None
+            x, y = int(xy[0]), int(xy[1])
+            try:
+                return grid.get(x, y)
+            except Exception:
+                return None
+    
+        def _door_is_open(xy):
+            t = _tile_at(xy)
+            return (getattr(t, "type", None) == "door") and bool(getattr(t, "is_open", False))
+    
+        def _pickup_color_if_on_key():
+            """Update held_color by checking what the agent is actually carrying."""
+            carried = getattr(getattr(self.agent, "state", None), "_carried_obj", None)
+            if isinstance(carried, np.ndarray):
+                try:
+                    carried = carried.item()
+                except Exception:
+                    carried = None
+            if carried is None:
+                self.held_color = None
+            else:
+                self.held_color = getattr(carried, "color", None)
+    
+        _pickup_color_if_on_key()
+    
+        path = None
+        # print("plan_idx:", self.plan_idx)
+    
+        if (not self.final_phase) and self.plan_idx < len(self.plan_events):
+            evt = self.plan_events[self.plan_idx]
+            ety = evt.get("type")
+            exy = tuple(evt.get("pos", {}).get("value")) if evt.get("pos") else None
+    
+            if ety == "pickup" and exy is not None:
+                target_color = evt.get("key") or evt.get("color")
+                if target_color is not None and self.held_color == target_color:
+                    # already have the key -> skip this pickup event
+                    self.plan_idx += 1
+                    path = None
+                else:
+                    # plan to the key position (online)
+                    path = astar_key((pos, dir), exy, self.env, self.hidden_cost,agent_idx = 0,version = True)
+    
+            elif ety == "open" and exy is not None:
+                if _door_is_open(exy):
+                    self.plan_idx += 1
+                    path = None
+                else:
+                    path = astar_open((pos, dir), exy, self.env, self.hidden_cost,version = True)
+        else:
+            # no more events: final phase -> go straight to goal
+            self.final_phase = True
+            path = astar((pos, dir), self.goal, self.env, self.hidden_cost)
+    
+        # -------- safe fallback --------
+        if not path or len(path) == 0:
+            return Action.stay
+    
+        # -------- execute ONLY ONE action; replan next step --------
+        # Some planners put current node at index 0. Take the first valid action safely.
+        print(path)
+        step_idx = 1 if len(path) > 1 else 0
+        act = path[step_idx][0]  # path like [(action, ...), ...]
+        return act
+
+
+class Observer(BaseAgent):
+
+    def __init__(self, env):
+
+        super().__init__(env.observer)
+
+        self.agent.name = "Observer"
+        self.goals = env.goals
+        self.goal_costs = None
+        self.start = None
+        self.prob_dict = None
+        self.agent.can_overlap = True
+        self.grid = env.base_grid
+        self.env = env
+        self.start = (env.observer.state.pos,env.observer.state.dir)
+        self.goal_belief = { g:1/len(self.goals) for g in self.goals}
+
+        self.step = -1
+        self.target_observations = []
+
+        self.infer_goal = None
+        self.mode = TRACK
+
+        self.agent.reported_goal = None
+
+    def compute_gr(self, evader_pos, evader_dir,cost):
+        current_dis = len(astar(self.start, evader_pos, self.env,cost)) - 1
+
+        probs = []
+        for goal in self.goals:
+            opt_cost = len(astar(self.start, goal, self.env,cost)) - 1
+            real_cost = current_dis + len(astar((evader_pos,evader_dir), goal, self.env,cost)) - 1
+            prob = np.exp(-(real_cost - opt_cost))/(1+np.exp(-(real_cost - opt_cost)))
+            probs.append(prob)
+
+        total = sum(probs)
+        normalized_probs = [p / total for p in probs]
+
+        largest_index = np.argmax(normalized_probs)
+        infer_goal = self.goals[largest_index]
+
+        probs = { g:p for g, p in zip(self.goals, normalized_probs)}
+
+        return infer_goal, probs
+    
+    def compute_target_paths(self, target_pos,target_dir, cost):
+        paths = []
+        costs = []
+
+        for goal in self.goals:
+            path = astar((target_pos,target_dir), goal, self.env,cost)
+            costs.append(len(path))
+
+        return paths, costs
+
+    def compute_action(self, obs):
+
+        self.step += 1
+        pos = list(obs['observer_pos'])
+        dir = np.array(obs['observer_dir'])
+        dir_vec = DIR_TO_VEC[dir]
+
+        cost = np.ones((self.grid.shape))
+
+
+        # STACK OBSERVATIONS
+        if 10 in obs["image"]: # Check if the target is in the image
+            target_pos = obs["target_pos"]
+            target_dir = obs["target_dir"]
+            self.infer_goal, self.prob_dict = self.compute_gr(target_pos, target_dir,cost)
+            self.goal_belief = self.prob_dict
+            target_paths, target_costs = self.compute_target_paths(target_pos, target_dir,cost)
+
+            self.target_observations.append((self.step, target_pos, target_dir, target_paths, target_costs))
+
+            if len(self.target_observations) > 3 and max((self.prob_dict).values())>0.8:
+                max_idx = np.argmax((self.prob_dict).values())
+                self.agent.reported_goal = self.goals[max_idx]
+                
+                return Action.done
+
+
+        path = None
+        dir_vec_ = None
+        # EXE MODE BEHAVIOUR
+        if self.mode == TRACK:
+            if len(self.target_observations) > 0:
+                last_target_obs = self.target_observations[-1]
+                step, target_pos, target_dir, target_paths, target_costs = last_target_obs
+                dir_vec_ = DIR_TO_VEC[target_dir]
+                path = astar((pos,dir), target_pos, self.env,cost)
+            else:
+                print("Target: Lost Track")
+                return Action.right
+
+        # elif self.mode == MOVE2GOAL:
+        #     path = astar((pos,dir), self.infer_goal, self.env,cost)
+
+        
+        if len(path)<=1 and dir_vec_ is not None:
+            n_dir = len(DIR_TO_VEC)
+            dir_vec_curr = DIR_TO_VEC[(dir+1)%n_dir]
+
+            if (dir_vec_==dir_vec_curr).all():
+                action = Action.right
+            else:
+                action = Action.left
+
+        elif len(path)<2 or path is None:
+            print("Target: Path not processed")
+            return Action.right
+
+
+        else:            
+            action = np.array(path[1][0])     
+        return action
