@@ -58,19 +58,18 @@ class LockTarget(BaseAgent):
     def compute_action(self, obs,env):
         pos = self.env.target.state.pos
         dir = self.env.target.state.dir
-        print()
     
         # 如果没有事件了 → 直接去终点
         while self.index < len(self.plan_events):
             evt = self.plan_events[self.index]
             ety = evt["type"]
-            print(ety,self.index)
+            #print(ety,self.index)
             # --- 事件类型判断 ---
             if ety == "pickup":
                 kpos = tuple(evt["pos"]["value"])
                 # 如果钥匙已经不存在 → 跳过
                 if not self._key_exists_at(kpos, evt["key"],env):
-                    print("here")
+                    #print("here")
                     self.index += 1
                     continue
                 # 否则去拿钥匙
@@ -85,7 +84,7 @@ class LockTarget(BaseAgent):
                     continue
                 # 否则去开门
                 path = astar_open((pos, dir), dpos, env, self.hidden_cost)
-                print("here 11")
+                #print("here 11")
                 return path[1][0] 
     
         # --- 如果所有事件都完成，走终点 ---

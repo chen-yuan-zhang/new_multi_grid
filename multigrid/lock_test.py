@@ -1,14 +1,14 @@
 from multigrid.envs.new_locked import AGRlocked
 from .gr_pursuer.agents.lock_target import LockTarget
-from .gr_pursuer.agents.new_KD_obs import BeliefUpdateObserver
+from .gr_pursuer.agents.obs import Observer
+
 
 import multigrid.envs
 
 env = AGRlocked(render_mode='human')
 observations, infos = env.reset()
 TargetAgent = LockTarget(env)
-ObserverAgent = BeliefUpdateObserver(env)
-
+ObserverAgent = Observer(env)
 
 while not env.unwrapped.is_done():
    # this is where you would insert your policy / policies

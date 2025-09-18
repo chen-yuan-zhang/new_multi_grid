@@ -65,6 +65,7 @@ def _edge_position(abs_graph, eid):
 
 # —— 初始已开门mask（无色门或 locked=False 视为已开）—— #
 def _initial_open_mask(abs_graph) -> int:
+    #print(abs_graph)
     mask = 0
     for eid, e in enumerate(abs_graph["edges"]):
         col = e.get("color", None)
@@ -74,7 +75,7 @@ def _initial_open_mask(abs_graph) -> int:
     return mask
 
 # —— 单目标：单钥匙 + 持久开门 —— #
-def _plan_onekey_persist_open(abs_graph, start_rid, goal_rid):
+def _plan_onekey_persist_open(abs_graph, start_rid, goal_rid, held = None):
     """
     返回：events（按时间顺序）
     events 元素两类：
@@ -86,7 +87,7 @@ def _plan_onekey_persist_open(abs_graph, start_rid, goal_rid):
     rooms = abs_graph["rooms"]
     adj   = _build_neighbors(abs_graph)
 
-    start_state = (start_rid, None, _initial_open_mask(abs_graph))
+    start_state = (start_rid, held, _initial_open_mask(abs_graph))
     q = deque([start_state])
 
     prev  = {start_state: None}
@@ -98,6 +99,7 @@ def _plan_onekey_persist_open(abs_graph, start_rid, goal_rid):
             # 回溯事件
             path_events: List[Dict[str, Any]] = []
             cur = (rid, held, open_mask)
+            #print(held, _canon(held))
             while prev[cur] is not None:
                 evt = prev_evt.get(cur)
                 if evt:

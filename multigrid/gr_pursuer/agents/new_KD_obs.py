@@ -159,20 +159,31 @@ class BeliefUpdateObserver(BaseAgent):
             # === 更新 goal_belief ===
             old_pos = chain[idx - 1][1] if idx > 0 else None
             if old_pos in self.goal_belief:
-                self.goal_belief[pos] = self.goal_belief.pop(old_pos)
-            else:
-                # 如果没有旧的，就初始化
-                self.goal_belief[pos] = self.goal_belief.get(pos, 0.0)
+                self.goal_belief[pos] = self.goal_belief[old_pos]
+                print(self.goal_belief[pos])
+            # else:
+            #     # 如果没有旧的，就初始化
+            #     self.goal_belief[pos] = self.goal_belief.get(pos, 0.0)
     
             # === 更新 actor_belief ===
             if old_pos in self.actor_belief:
-                self.actor_belief[pos] = self.actor_belief.pop(old_pos)
-            else:
-                self.actor_belief[pos] = self.actor_belief.get(
-                    pos, set_uniform_prob(self.env.base_grid, 1.0))
-    
+                self.actor_belief[pos] = self.actor_belief[old_pos]
+            # else:
+            #     self.actor_belief[pos] = self.actor_belief.get(
+            #         pos, set_uniform_prob(self.env.base_grid, 1.0))
+
             # 收集新的目标位置
             new_goals.append(pos)
+
+        for g in self.final_goals:
+            idx = self.current_subgoal_idx[g]
+            chain = self.goal_chains[g]
+            old_pos = chain[idx - 1][1] if idx > 0 else None
+            if old_pos in self.goal_belief:
+                self.goal_belief.pop(old_pos)
+            if old_pos in self.actor_belief:
+                self.actor_belief.pop(old_pos)
+    
     
         # === 更新 self.goals ===
         self.goals = new_goals

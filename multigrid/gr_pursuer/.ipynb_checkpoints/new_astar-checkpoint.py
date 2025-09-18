@@ -181,7 +181,7 @@ def execute_reverse_action(pos_state, action, env):
     if action == Action.forward:
         dx, dy = DIR_TO_VEC[dir]
         new_pos = (pos[0] - dx, pos[1] - dy)
-        if 0 <= new_pos[0] < env.width and 0 <= new_pos[1] < env.height:
+        if 0 <= new_pos[0] < env.width and 0 <= new_pos[1] < env.height and env.base_grid[new_pos[0], new_pos[1]] != 2:
             return True, (new_pos, dir)
         
         return False, (pos, dir) # If the agent hits a wall, return the current state
