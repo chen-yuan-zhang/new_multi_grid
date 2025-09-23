@@ -23,3 +23,5 @@ docs/_build/
 .env
 .venv
 venv
+
+unsloth_compiled_cache/
