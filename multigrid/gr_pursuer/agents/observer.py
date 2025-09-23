@@ -21,6 +21,9 @@ TRACK = 0
 MOVE2GOAL = 1
 BETA = 1
 
+# Behavior type indices (extend if more behaviors are needed)
+BEHAVIOR_TYPES = [0, 1, 2, 3]
+
 class Observer(BaseAgent):
 
     def __init__(self, env):
@@ -159,12 +162,20 @@ class BeliefUpdateObserver(BaseAgent):
         else:
             self.goal_belief = { g:1/len(self.goals) for g in self.goals}
 
+        # actor_belief now: {goal: [belief_grid_behavior0, belief_grid_behavior1, ...]}
         if init_actor_belief:
-            self.actor_belief = init_actor_belief
+            self.actor_belief = init_actor_belief  # assume already in list format per goal
         else:
-            self.actor_belief = {g: set_uniform_prob(env.base_grid, self.goal_belief[g]) for g in self.goals}
+            self.actor_belief = {
+                g: [
+                    set_uniform_prob(env.base_grid, self.goal_belief[g] / len(BEHAVIOR_TYPES))
+                    for _ in BEHAVIOR_TYPES
+                ]
+                for g in self.goals
+            }
 
         self.dist_matrix = self.compute_pairwise_distances()
+        # self.behavior_type_belief = {b: 1/len(BEHAVIOR_TYPES) for b in BEHAVIOR_TYPES}  # uniform prior over behavior types
 
 
     def compute_pairwise_distances(self):
@@ -224,7 +235,7 @@ class BeliefUpdateObserver(BaseAgent):
         self.update_goal_belief() 
         # update the goal belief based on the belief of the observer, each entry is the conditional prob P(goal|obs history)
         # assume goal directed behavior, predict next step belief based on current belief
-        self.actor_belief = update_actor_belief(self.actor_belief, self.goals, self.env, self.dist_matrix) 
+        self.actor_belief = update_actor_belief_multi(self.actor_belief, self.goals, self.env, self.dist_matrix) 
         # update the actor belief based on the goal belief, each entry is the joint prob P(state, goal, obs history)
         self.render_and_save(f'belief_update_test/actor_belief_step_{self.step}.png', obs)
 
@@ -232,12 +243,26 @@ class BeliefUpdateObserver(BaseAgent):
 
         return self.mcts()
 
+    def augment_observation(self, obs):
+        """
+        Augment observation with belief distributions.
+        This method calls the environment's augment_obs_with_beliefs method.
+        
+        Parameters:
+        obs: Current observation to augment
+        
+        Returns:
+        Augmented observation with belief distributions
+        """
+        return self.env.augment_obs_with_beliefs(obs, self.goal_belief, self.actor_belief)
+
 
 
 
     def greedy(self, iterations = 100, exploration_weight = 1):
         start_pos_state = (self.pos, self.dir)
-        start_actor_belief = deepcopy(self.actor_belief)
+        # Aggregate belief across all behavior types for planning
+        start_actor_belief = {goal: aggregate_actor_belief(belief_list) for goal, belief_list in self.actor_belief.items()}
         start_goal_belief = deepcopy(self.goal_belief)
         root = MCTSNode(self.agent, start_pos_state, start_actor_belief, start_goal_belief, self.env, self.dist_matrix)
 
@@ -255,7 +280,8 @@ class BeliefUpdateObserver(BaseAgent):
         
     def mcts(self, iterations = 100, exploration_weight = 1):
         start_pos_state = (self.pos, self.dir)
-        start_actor_belief = deepcopy(self.actor_belief)
+        # Aggregate belief across all behavior types for planning
+        start_actor_belief = {goal: aggregate_actor_belief(belief_list) for goal, belief_list in self.actor_belief.items()}
         start_goal_belief = deepcopy(self.goal_belief)
         root = MCTSNode(self.agent, start_pos_state, start_actor_belief, start_goal_belief, self.env, self.dist_matrix)
         
@@ -283,9 +309,15 @@ class BeliefUpdateObserver(BaseAgent):
         """
         os.makedirs(os.path.dirname(filename), exist_ok=True)
 
-        total_belief = np.zeros_like(next(iter(self.actor_belief.values())))
-        for goal, belief in self.actor_belief.items():
-            total_belief += belief
+        # Get a sample grid shape from the first behavior type of the first goal
+        sample_goal = next(iter(self.actor_belief))
+        sample_grid = self.actor_belief[sample_goal][0]
+        total_belief = np.zeros_like(sample_grid)
+        
+        # Sum across all goals and all behavior types
+        for goal, belief_list in self.actor_belief.items():
+            for behavior_grid in belief_list:
+                total_belief += behavior_grid
 
         belief_sum = np.sum(total_belief, axis=2)
         log_belief_sum = np.log(belief_sum + 1e-10)
@@ -338,9 +370,12 @@ class BeliefUpdateObserver(BaseAgent):
             
             
             for goal in self.goals:
-                new_actor_belief = np.zeros_like(self.actor_belief[goal])
-                new_actor_belief[tuple(target_pos)][target_dir] = self.actor_belief[goal][tuple(target_pos)][target_dir]
-                self.actor_belief[goal] = new_actor_belief
+                new_list = []
+                for behavior_grid in self.actor_belief[goal]:
+                    new_grid = np.zeros_like(behavior_grid)
+                    new_grid[tuple(target_pos)][target_dir] = behavior_grid[tuple(target_pos)][target_dir]
+                    new_list.append(new_grid)
+                self.actor_belief[goal] = new_list
                 
 
         else:
@@ -384,7 +419,8 @@ class BeliefUpdateObserver(BaseAgent):
             # highlight_mask = obs['fov']
             for goal in self.goals:
                 for cell in np.argwhere(highlight_mask == 1):
-                    self.actor_belief[goal][tuple(cell)] = 0
+                    for behavior_idx in range(len(self.actor_belief[goal])):
+                        self.actor_belief[goal][behavior_idx][tuple(cell)] = 0
 
                 
                
@@ -399,14 +435,16 @@ class BeliefUpdateObserver(BaseAgent):
         """
         # Update the belief of the observer based on the observed FoV
         for goal in self.goals:
-            self.goal_belief[goal] = np.sum(self.actor_belief[goal])
+            # Sum across all behavior types and then across state dimensions
+            self.goal_belief[goal] = sum(np.sum(behavior_grid) for behavior_grid in self.actor_belief[goal])
 
         total = sum(self.goal_belief.values())
         if total == 0:
             print("should not happen")
             print(self.goal_belief)
             for goal in self.goals:
-                print(np.where(self.actor_belief[goal]>0))
+                for behavior_idx, behavior_grid in enumerate(self.actor_belief[goal]):
+                    print(f"Goal {goal}, behavior {behavior_idx}:", np.where(behavior_grid > 0))
             input()
         for goal in self.goals:
             self.goal_belief[goal] /= total
@@ -414,72 +452,127 @@ class BeliefUpdateObserver(BaseAgent):
 
 
 
-def update_actor_belief(actor_belief, goals, env, dist_matrix, beta = BETA):
-    new_actor_belief = {goal: np.zeros_like(actor_belief[goal]) for goal in goals}
+# def update_actor_belief(actor_belief, goals, env, dist_matrix, beta = BETA):
+#     new_actor_belief = {goal: np.zeros_like(actor_belief[goal]) for goal in goals}
 
-    for goal in goals:
-        current_actor_belief = actor_belief[goal]
-        for cell in np.argwhere(current_actor_belief > 0): # select no zero prob
-            pos, dir = cell[:2], cell[2]
-            pos_state = (pos, dir)
-            prob = current_actor_belief[tuple(cell)]
-            successors = get_successor(env, pos_state)
+#     for goal in goals:
+#         current_actor_belief = actor_belief[goal]
+#         for cell in np.argwhere(current_actor_belief > 0): # select no zero prob
+#             pos, dir = cell[:2], cell[2]
+#             pos_state = (pos, dir)
+#             prob = current_actor_belief[tuple(cell)]
+#             successors = get_successor(env, pos_state)
 
-            tran_probs = {}
+#             tran_probs = {}
 
-            if pos[0] == goal[0] and pos[1] == goal[1]:
-                successors = list(filter(lambda x: x[0] == Action.stay, successors))
+#             if pos[0] == goal[0] and pos[1] == goal[1]:
+#                 successors = list(filter(lambda x: x[0] == Action.stay, successors))
 
-            # ---- For sukai: tran_probs[succ]  = neural_predict(current_state, goal, behaviour_type)
-            # * Dummy case for enumerate Behavior Type
-            # ! make sure run `source env.sh` before running 
-            # ! make sure run this code in ansr-nectar-2 server 
-            BEHAVIOR_TYPE_LIST = [0, 1, 2, 3]
+#             # ---- For sukai: tran_probs[succ]  = neural_predict(current_state, goal, behaviour_type)
+#             # * Dummy case for enumerate Behavior Type
+#             # ! make sure run `source env.sh` before running 
+#             # ! make sure run this code in ansr-nectar-2 server 
+#             BEHAVIOR_TYPE_LIST = [0, 1, 2, 3]
             
-            behaviour_type = np.random.choice(BEHAVIOR_TYPE_LIST, p=[0.25, 0.25, 0.25, 0.25])
+#             behaviour_type = np.random.choice(BEHAVIOR_TYPE_LIST, p=[0.25, 0.25, 0.25, 0.25])
             
-            # reformat successor 
-            new_successors = []
-            for action, succ in successors:
-                next_pos, next_dir = succ
-                new_successors.append((action, ((next_pos[0], next_pos[1]), next_dir)))
+#             # reformat successor 
+#             new_successors = []
+#             for action, succ in successors:
+#                 next_pos, next_dir = succ
+#                 new_successors.append((action, ((next_pos[0], next_pos[1]), next_dir)))
                 
-            successors = new_successors
+#             successors = new_successors
             
-            tran_probs = neuro_predict(env, goal, behaviour_type, successors, pos_state)
+#             tran_probs = neuro_predict(env, goal, behaviour_type, successors, pos_state)
             
-            # ! Note that the deep learning model cause the processing time to be long, you may want to shorten size of testing environments. it takes approx 2 mins to run 1 episode. 
+#             # ! Note that the deep learning model cause the processing time to be long, you may want to shorten size of testing environments. it takes approx 2 mins to run 1 episode. 
             
-            # >>> tran_probs
-            # >>> {'stay': np.float32(8.090865e-09), 'left': np.float32(0.46875), 'forward': np.float32(0.53125), 'right': np.float32(1.1995435e-06)}
+#             # >>> tran_probs
+#             # >>> {'stay': np.float32(8.090865e-09), 'left': np.float32(0.46875), 'forward': np.float32(0.53125), 'right': np.float32(1.1995435e-06)}
             
-            # ---- End of sukai section ----
-            # --- Comment out to test deep learning model ---
-            # for action, succ in successors:
+#             # ---- End of sukai section ----
+#             # --- Comment out to test deep learning model ---
+#             # for action, succ in successors:
 
-            #     next_pos, next_dir = succ
+#             #     next_pos, next_dir = succ
 
-            #     succ = ((next_pos[0], next_pos[1]), next_dir)
+#             #     succ = ((next_pos[0], next_pos[1]), next_dir)
 
-            #     if (succ, goal) in dist_matrix:
-            #         tran_probs[succ] = math.exp(- beta * (1 + dist_matrix[(succ, goal)]))
+#             #     if (succ, goal) in dist_matrix:
+#             #         tran_probs[succ] = math.exp(- beta * (1 + dist_matrix[(succ, goal)]))
 
                     
-            #     else:
-            #         print("should not happen")
-            #         input()
-            #         tran_probs[succ] = 0
-            # --- End of comment out ---
+#             #     else:
+#             #         print("should not happen")
+#             #         input()
+#             #         tran_probs[succ] = 0
+#             # --- End of comment out ---
     
-            total_prob = sum(tran_probs.values())
-            if total_prob > 0:
-                for succ in tran_probs:
-                    tran_probs[succ] /= total_prob
+#             total_prob = sum(tran_probs.values())
+#             if total_prob > 0:
+#                 for succ in tran_probs:
+#                     tran_probs[succ] /= total_prob
 
-            for action, succ in successors:
-                new_actor_belief[goal][succ[0][0],succ[0][1],succ[1]] += prob*tran_probs[((succ[0][0],succ[0][1]),succ[1])]
+#             for action, succ in successors:
+#                 new_actor_belief[goal][succ[0][0],succ[0][1],succ[1]] += prob*tran_probs[((succ[0][0],succ[0][1]),succ[1])]
 
  
+#     return new_actor_belief
+
+def update_actor_belief_multi(actor_belief, goals, env, dist_matrix, beta=BETA):
+    """
+    Update actor belief for multiple behavior types.
+    
+    Parameters:
+    actor_belief: {goal: [belief_grid_behavior0, belief_grid_behavior1, ...]}
+    goals: List of goal positions
+    env: The environment
+    dist_matrix: Distance matrix for optimal paths
+    beta: Temperature parameter
+    
+    Returns:
+    Updated actor_belief dictionary with same structure
+    """
+    new_actor_belief = {goal: [np.zeros_like(grid) for grid in actor_belief[goal]] for goal in goals}
+
+    for goal in goals:
+        for behavior_idx, current_grid in enumerate(actor_belief[goal]):
+            # Find non-zero probability cells
+            nonzero_cells = np.argwhere(current_grid > 0)
+            if nonzero_cells.size == 0:
+                continue
+                
+            for cell in nonzero_cells:
+                pos, direction = cell[:2], cell[2]
+                pos_state = (pos, direction)
+                prob = current_grid[tuple(cell)]
+                successors = get_successor(env, pos_state)
+
+                # If at goal, only allow staying
+                if pos[0] == goal[0] and pos[1] == goal[1]:
+                    successors = list(filter(lambda x: x[0] == Action.stay, successors))
+
+                # Format successors for neural predictor
+                formatted_successors = []
+                for action, succ in successors:
+                    next_pos, next_dir = succ
+                    formatted_successors.append((action, ((next_pos[0], next_pos[1]), next_dir)))
+
+                # Get transition probabilities from neural predictor
+                tran_probs = neuro_predict(env, goal, behavior_idx, formatted_successors, pos_state)
+                
+                # Normalize probabilities
+                total_prob = sum(float(v) for v in tran_probs.values())
+                if total_prob <= 0:
+                    continue
+                    
+                # Update belief for each successor
+                for action, succ in formatted_successors:
+                    action_key = action if isinstance(action, str) else getattr(action, 'name', str(action))
+                    transition_prob = float(tran_probs.get(action_key, 0.0)) / total_prob
+                    new_actor_belief[goal][behavior_idx][succ[0][0], succ[0][1], succ[1]] += prob * transition_prob
+
     return new_actor_belief
 
 
@@ -541,14 +634,16 @@ class MCTSNode:
             if action not in tried_moves:
                 g = self.sample_goal()
  
-                actor_pos_state = self.sample_from_3d_belief(self.actor_belief[g])
+                # Aggregate belief across all behavior types for sampling
+                aggregated_belief = aggregate_actor_belief(self.actor_belief[g])
+                actor_pos_state = self.sample_from_3d_belief(aggregated_belief)
 
                 new_actor_belief = self.update_actor_belief_from_obs(actor_pos_state, next_pos_state)
 
                 new_goal_belief = self.update_goal_belief(new_actor_belief)
       
                 # goal directed update of the actor belief
-                new_actor_belief = update_actor_belief(new_actor_belief, self.env.goals, self.env, self.dist_matrix)
+                new_actor_belief = update_actor_belief_multi(new_actor_belief, self.env.goals, self.env, self.dist_matrix)
 
 
                 new_node = MCTSNode(self.agent, next_pos_state, new_actor_belief, new_goal_belief, self.env, self.dist_matrix, action = action, parent=self)
@@ -584,7 +679,8 @@ class MCTSNode:
             
     def update_actor_belief_from_obs(self, actor_pos_state, observer_pos_state):
         
-        new_actor_belief = {goal: np.zeros_like(self.actor_belief[goal]) for goal in self.actor_belief}
+        # Initialize new actor belief with same structure as current (list of grids per goal)
+        new_actor_belief = {goal: [np.zeros_like(grid) for grid in self.actor_belief[goal]] for goal in self.actor_belief}
 
         actor_pos = actor_pos_state[0], actor_pos_state[1]
         actor_dir = actor_pos_state[2]
@@ -629,15 +725,19 @@ class MCTSNode:
 
         if highlight_mask[actor_pos]: # if the actor is in the observer's view
             for g in self.goal_belief:
-                new_actor_belief[g][actor_pos][actor_dir] = self.actor_belief[g][actor_pos][actor_dir] 
+                # Update each behavior grid separately
+                for behavior_idx in range(len(self.actor_belief[g])):
+                    new_actor_belief[g][behavior_idx][actor_pos][actor_dir] = self.actor_belief[g][behavior_idx][actor_pos][actor_dir] 
         else:
             for g in self.goal_belief: # not in observer's view: for each grid in FoV = 0, otherwise use past actor_belief
-                for cell in np.argwhere(highlight_mask == True):
-   
-                    new_actor_belief[g][tuple(cell)] = 0
+                for behavior_idx in range(len(self.actor_belief[g])):
+                    # Zero out cells in field of view
+                    for cell in np.argwhere(highlight_mask == True):
+                        new_actor_belief[g][behavior_idx][tuple(cell)] = 0
 
-                for cell in np.argwhere(highlight_mask == False):
-                    new_actor_belief[g][tuple(cell)] = self.actor_belief[g][tuple(cell)]
+                    # Keep belief for cells not in field of view
+                    for cell in np.argwhere(highlight_mask == False):
+                        new_actor_belief[g][behavior_idx][tuple(cell)] = self.actor_belief[g][behavior_idx][tuple(cell)]
                 
 
         return new_actor_belief
@@ -694,3 +794,23 @@ def compute_entropy(goal_belief):
     entropy = -np.sum(probabilities * np.log2(probabilities + 1e-10))  # Small offset to avoid log(0)
     
     return entropy
+
+
+def aggregate_actor_belief(belief_list):
+    """
+    Aggregate a list of belief grids into a single grid by summing them.
+    
+    Parameters:
+    belief_list: List of belief grids (one per behavior type)
+    
+    Returns:
+    np.array: Aggregated belief grid
+    """
+    if not belief_list:
+        return None
+    aggregated = np.zeros_like(belief_list[0])
+    for grid in belief_list:
+        aggregated += grid
+    return aggregated
+
+
