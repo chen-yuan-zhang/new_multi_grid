@@ -762,7 +762,11 @@ class MCTSNode:
 
     def sample_from_3d_belief(self, actor_belief):
         """Samples a location from the 3D belief map using probability distribution."""
-        depth, height, width = actor_belief.shape  # Get dimensions
+        # depth, height, width = actor_belief.shape  # Get dimensions # ! TODO raise ValueError: not enough values to unpack (expected 3, got 2), it seems that actor_belief shape is 2D array
+        if len(actor_belief.shape) == 2:
+            height, width = actor_belief.shape
+        elif len(actor_belief.shape) == 3:
+            depth, height, width = actor_belief.shape
         # Flatten the 3D belief map into a 1D array
         flattened_belief = np.copy(actor_belief).ravel()
 
@@ -806,7 +810,8 @@ def aggregate_actor_belief(belief_list):
     Returns:
     np.array: Aggregated belief grid
     """
-    if not belief_list:
+    if belief_list is None or len(belief_list) == 0: # ! TODO if direct call if not belief_list, it will raise ValueError: The truth value of an array with more than one element is ambiguous. Use a.any() or a.all()
+
         return None
     aggregated = np.zeros_like(belief_list[0])
     for grid in belief_list:
