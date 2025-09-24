@@ -13,7 +13,7 @@ import os
 from collections import deque
 from copy import deepcopy
 
-from .neuro_predictor import neuro_predict
+# from .neuro_predictor import neuro_predict
 
 
 # MODES
@@ -280,8 +280,8 @@ class BeliefUpdateObserver(BaseAgent):
         
     def mcts(self, iterations = 100, exploration_weight = 1):
         start_pos_state = (self.pos, self.dir)
-        # Aggregate belief across all behavior types for planning
-        start_actor_belief = {goal: aggregate_actor_belief(belief_list) for goal, belief_list in self.actor_belief.items()}
+        # Keep multi-behavior structure for planning
+        start_actor_belief = deepcopy(self.actor_belief)
         start_goal_belief = deepcopy(self.goal_belief)
         root = MCTSNode(self.agent, start_pos_state, start_actor_belief, start_goal_belief, self.env, self.dist_matrix)
         
@@ -559,8 +559,20 @@ def update_actor_belief_multi(actor_belief, goals, env, dist_matrix, beta=BETA):
                     next_pos, next_dir = succ
                     formatted_successors.append((action, ((next_pos[0], next_pos[1]), next_dir)))
 
-                # Get transition probabilities from neural predictor
-                tran_probs = neuro_predict(env, goal, behavior_idx, formatted_successors, pos_state)
+                # # Get transition probabilities from neural predictor
+                # tran_probs = neuro_predict(env, goal, behavior_idx, formatted_successors, pos_state)
+
+                # symbolic model for testing
+                tran_probs = {}
+                for action, succ in successors:
+                    next_pos, next_dir = succ
+                    succ_state = ((next_pos[0], next_pos[1]), next_dir)
+                    if (succ_state, goal) in dist_matrix:
+                        tran_probs[succ_state] = math.exp(- beta * (1 + dist_matrix[(succ_state, goal)]))
+                    else:
+                        print("should not happen")
+                        input()
+                        tran_probs[succ_state] = 0
                 
                 # Normalize probabilities
                 total_prob = sum(float(v) for v in tran_probs.values())
@@ -569,8 +581,8 @@ def update_actor_belief_multi(actor_belief, goals, env, dist_matrix, beta=BETA):
                     
                 # Update belief for each successor
                 for action, succ in formatted_successors:
-                    action_key = action if isinstance(action, str) else getattr(action, 'name', str(action))
-                    transition_prob = float(tran_probs.get(action_key, 0.0)) / total_prob
+                    succ_state = succ  # succ is already in format ((x, y), dir)
+                    transition_prob = float(tran_probs.get(succ_state, 0.0)) / total_prob
                     new_actor_belief[goal][behavior_idx][succ[0][0], succ[0][1], succ[1]] += prob * transition_prob
 
     return new_actor_belief
@@ -731,13 +743,13 @@ class MCTSNode:
         else:
             for g in self.goal_belief: # not in observer's view: for each grid in FoV = 0, otherwise use past actor_belief
                 for behavior_idx in range(len(self.actor_belief[g])):
-                    # Zero out cells in field of view
+                    # Zero out cells in field of view (all direction layers)
                     for cell in np.argwhere(highlight_mask == True):
-                        new_actor_belief[g][behavior_idx][tuple(cell)] = 0
+                        new_actor_belief[g][behavior_idx][cell[0], cell[1], :] = 0
 
-                    # Keep belief for cells not in field of view
+                    # Keep belief for cells not in field of view (all direction layers)
                     for cell in np.argwhere(highlight_mask == False):
-                        new_actor_belief[g][behavior_idx][tuple(cell)] = self.actor_belief[g][behavior_idx][tuple(cell)]
+                        new_actor_belief[g][behavior_idx][cell[0], cell[1], :] = self.actor_belief[g][behavior_idx][cell[0], cell[1], :]
                 
 
         return new_actor_belief
@@ -810,9 +822,9 @@ def aggregate_actor_belief(belief_list):
     Returns:
     np.array: Aggregated belief grid
     """
-    if belief_list is None or len(belief_list) == 0: # ! TODO if direct call if not belief_list, it will raise ValueError: The truth value of an array with more than one element is ambiguous. Use a.any() or a.all()
+    # if belief_list is None or len(belief_list) == 0: # ! TODO if direct call if not belief_list, it will raise ValueError: The truth value of an array with more than one element is ambiguous. Use a.any() or a.all()
 
-        return None
+    #     return None
     aggregated = np.zeros_like(belief_list[0])
     for grid in belief_list:
         aggregated += grid

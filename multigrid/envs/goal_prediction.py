@@ -428,7 +428,13 @@ class AGREnv(MultiGridEnv):
         Returns:
         Augmented observations
         """
-        obs_observations = obs[0] if isinstance(obs, (list, tuple)) else obs
+        # Handle different observation formats (dict with agent indices, list/tuple, or single obs)
+        if isinstance(obs, dict) and 0 in obs:
+            obs_observations = obs[0]  # Observer is agent 0
+        elif isinstance(obs, (list, tuple)):
+            obs_observations = obs[0]  # Observer is first agent
+        else:
+            obs_observations = obs  # Single observation
         
         # Add goal belief distribution
         obs_observations["goal_belief"] = dict(goal_belief)
@@ -454,7 +460,10 @@ class AGREnv(MultiGridEnv):
                     
         obs_observations["behavior_patterns"] = behavior_pattern_dist
         
-        if isinstance(obs, list):
+        if isinstance(obs, dict) and 0 in obs:
+            obs[0] = obs_observations
+            return obs
+        elif isinstance(obs, list):
             obs[0] = obs_observations
             return obs
         elif isinstance(obs, tuple):
