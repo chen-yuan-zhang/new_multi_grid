@@ -468,7 +468,7 @@ class BeliefUpdateObserver(BaseAgent):
 #             if pos[0] == goal[0] and pos[1] == goal[1]:
 #                 successors = list(filter(lambda x: x[0] == Action.stay, successors))
 
-#             # ---- For sukai: tran_probs[succ]  = neural_predict(current_state, goal, behaviour_type)
+#             # tran_probs[succ]  = neural_predict(current_state, goal, behaviour_type)
 #             # * Dummy case for enumerate Behavior Type
 #             # ! make sure run `source env.sh` before running 
 #             # ! make sure run this code in ansr-nectar-2 server 
@@ -491,7 +491,7 @@ class BeliefUpdateObserver(BaseAgent):
 #             # >>> tran_probs
 #             # >>> {'stay': np.float32(8.090865e-09), 'left': np.float32(0.46875), 'forward': np.float32(0.53125), 'right': np.float32(1.1995435e-06)}
             
-#             # ---- End of sukai section ----
+#             #
 #             # --- Comment out to test deep learning model ---
 #             # for action, succ in successors:
 
@@ -560,6 +560,7 @@ def update_actor_belief_multi(actor_belief, goals, env, dist_matrix, beta=BETA):
                     formatted_successors.append((action, ((next_pos[0], next_pos[1]), next_dir)))
 
                 # # Get transition probabilities from neural predictor
+                # # for sukai: uncomment the following line and symbolic model part to use the neural predictor
                 # tran_probs = neuro_predict(env, goal, behavior_idx, formatted_successors, pos_state)
 
                 # symbolic model for testing
