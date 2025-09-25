@@ -13,7 +13,7 @@ import os
 from collections import deque
 from copy import deepcopy
 
-# from .neuro_predictor import neuro_predict
+from .neuro_predictor import neuro_predict
 
 
 # MODES
@@ -559,21 +559,21 @@ def update_actor_belief_multi(actor_belief, goals, env, dist_matrix, beta=BETA):
                     next_pos, next_dir = succ
                     formatted_successors.append((action, ((next_pos[0], next_pos[1]), next_dir)))
 
-                # # Get transition probabilities from neural predictor
-                # # for sukai: uncomment the following line and symbolic model part to use the neural predictor
-                # tran_probs = neuro_predict(env, goal, behavior_idx, formatted_successors, pos_state)
+                # Get transition probabilities from neural predictor
+                # for sukai: uncomment the following line and symbolic model part to use the neural predictor
+                tran_probs = neuro_predict(env, goal, behavior_idx, formatted_successors, pos_state)
 
                 # symbolic model for testing
-                tran_probs = {}
-                for action, succ in successors:
-                    next_pos, next_dir = succ
-                    succ_state = ((next_pos[0], next_pos[1]), next_dir)
-                    if (succ_state, goal) in dist_matrix:
-                        tran_probs[succ_state] = math.exp(- beta * (1 + dist_matrix[(succ_state, goal)]))
-                    else:
-                        print("should not happen")
-                        input()
-                        tran_probs[succ_state] = 0
+                # tran_probs = {}
+                # for action, succ in successors:
+                #     next_pos, next_dir = succ
+                #     succ_state = ((next_pos[0], next_pos[1]), next_dir)
+                #     if (succ_state, goal) in dist_matrix:
+                #         tran_probs[succ_state] = math.exp(- beta * (1 + dist_matrix[(succ_state, goal)]))
+                #     else:
+                #         print("should not happen")
+                #         input()
+                #         tran_probs[succ_state] = 0
                 
                 # Normalize probabilities
                 total_prob = sum(float(v) for v in tran_probs.values())
