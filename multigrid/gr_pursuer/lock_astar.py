@@ -387,6 +387,7 @@ def get_successor(env, pos_state, target_key_pos,version = None):
     # 仅使用不会改变 env 的基本动作
     for action in (Action.left, Action.right, Action.forward, Action.stay, Action.drop):
         ok, succ = execute_action((pos, d), action, env,version)
+
         if ok:
             successors.append((action, (succ[0], succ[1], has_key)))
 
