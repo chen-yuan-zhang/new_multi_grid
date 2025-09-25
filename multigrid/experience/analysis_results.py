@@ -8,7 +8,7 @@ if __name__ == "__main__":
     # datasets = ["3scenarios_small.csv", "5scenarios_small.csv", "7scenarios_small.csv", "3scenarios_medium.csv", "5scenarios_medium.csv", "10scenarios_medium.csv"]
     # algorithms = ["random", "coverage", "greedy", "agrmcts_goal_max"]
 
-    datasets = ["mcts.csv","coverage.csv","greedy.csv"]
+    datasets = ["results_2_temp.csv"]
 
     for dataset in datasets:
         all_algorithm_scnerios = []

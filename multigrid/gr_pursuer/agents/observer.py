@@ -144,7 +144,7 @@ class Observer(BaseAgent):
 
 
 class BeliefUpdateObserver(BaseAgent):
-    def __init__(self, env, init_actor_belief = None, init_goal_belief = None):
+    def __init__(self, env, init_actor_belief = None, init_goal_belief = None, use_neural_predictor = False):
         
         super().__init__(env.observer)
 
@@ -156,6 +156,7 @@ class BeliefUpdateObserver(BaseAgent):
         self.step = -1
         self.pos = env.observer.pos
         self.dir = env.observer.dir
+        self.use_neural_predictor = use_neural_predictor
 
         if init_goal_belief:
             self.goal_belief = init_goal_belief
@@ -176,6 +177,13 @@ class BeliefUpdateObserver(BaseAgent):
 
         self.dist_matrix = self.compute_pairwise_distances()
         # self.behavior_type_belief = {b: 1/len(BEHAVIOR_TYPES) for b in BEHAVIOR_TYPES}  # uniform prior over behavior types
+        
+        # Cache for transition probabilities to avoid redundant calculations
+        self.transition_prob_cache = {}
+        
+        # Cache statistics
+        self.cache_hits = 0
+        self.cache_misses = 0
 
 
     def compute_pairwise_distances(self):
@@ -223,6 +231,130 @@ class BeliefUpdateObserver(BaseAgent):
 
         return adjusted_dist_matrix
     
+    def get_cached_transition_probs(self, pos_state, goal, behavior_idx, successors, beta=BETA, use_neural=False):
+        """
+        Get transition probabilities with caching to avoid redundant calculations.
+        
+        Parameters:
+        pos_state: Current position and direction state
+        goal: Goal position
+        behavior_idx: Behavior type index
+        successors: List of possible successor states
+        beta: Temperature parameter
+        use_neural: Whether to use neural predictor (if available)
+        
+        Returns:
+        dict: Transition probabilities for each successor state
+        """
+        # Create cache key from inputs (include use_neural flag in key)
+        successors_key = tuple(sorted([(action, ((next_pos[0], next_pos[1]), next_dir)) 
+                                     for action, (next_pos, next_dir) in successors]))
+        # Convert goal to tuple, handling numpy arrays
+        goal_key = tuple(goal) if hasattr(goal, '__iter__') and not isinstance(goal, str) else goal
+        cache_key = (pos_state, goal_key, behavior_idx, successors_key, beta, use_neural)
+        
+        # Check if result is already cached
+        if cache_key in self.transition_prob_cache:
+            self.cache_hits += 1
+            return self.transition_prob_cache[cache_key]
+        
+        self.cache_misses += 1
+        
+        # Calculate transition probabilities
+        tran_probs = {}
+        
+        if use_neural:
+            # Neural predictor version
+            formatted_successors = []
+            for action, succ in successors:
+                next_pos, next_dir = succ
+                formatted_successors.append((action, ((next_pos[0], next_pos[1]), next_dir)))
+            # Uncomment the following line when neural predictor is available
+            # tran_probs = neuro_predict(self.env, goal, behavior_idx, formatted_successors, pos_state)
+            # For now, fall back to symbolic model
+            use_neural = False
+        
+        if not use_neural:
+            # Symbolic model
+            for action, succ in successors:
+                next_pos, next_dir = succ
+                succ_state = ((next_pos[0], next_pos[1]), next_dir)
+                if (succ_state, goal) in self.dist_matrix:
+                    tran_probs[succ_state] = math.exp(-beta * (1 + self.dist_matrix[(succ_state, goal)]))
+                else:
+                    print("should not happen")
+                    input()
+                    tran_probs[succ_state] = 0
+        
+        # Cache the result
+        self.transition_prob_cache[cache_key] = tran_probs
+        return tran_probs
+
+    def update_actor_belief_multi_cached(self, actor_belief, goals, beta=BETA):
+        """
+        Cached version of update_actor_belief_multi that uses the transition probability cache.
+        
+        Parameters:
+        actor_belief: {goal: [belief_grid_behavior0, belief_grid_behavior1, ...]}
+        goals: List of goal positions
+        beta: Temperature parameter
+        
+        Returns:
+        Updated actor_belief dictionary with same structure
+        """
+        new_actor_belief = {goal: [np.zeros_like(grid) for grid in actor_belief[goal]] for goal in goals}
+
+        for goal in goals:
+            for behavior_idx, current_grid in enumerate(actor_belief[goal]):
+                # Find non-zero probability cells
+                nonzero_cells = np.argwhere(current_grid > 0)
+                if nonzero_cells.size == 0:
+                    continue
+                    
+                for cell in nonzero_cells:
+                    pos, direction = cell[:2], cell[2]
+                    # Convert numpy arrays to hashable types for cache keys
+                    pos_state = ((int(pos[0]), int(pos[1])), int(direction))
+                    prob = current_grid[tuple(cell)]
+                    successors = get_successor(self.env, pos_state)
+
+                    # If at goal, only allow staying
+                    if pos[0] == goal[0] and pos[1] == goal[1]:
+                        successors = list(filter(lambda x: x[0] == Action.stay, successors))
+
+                    # Get cached transition probabilities
+                    tran_probs = self.get_cached_transition_probs(pos_state, goal, behavior_idx, successors, beta, self.use_neural_predictor)
+                    
+                    # Normalize probabilities
+                    total_prob = sum(float(v) for v in tran_probs.values())
+                    if total_prob <= 0:
+                        continue
+                        
+                    # Update belief for each successor
+                    for action, succ in successors:
+                        next_pos, next_dir = succ
+                        succ_state = ((next_pos[0], next_pos[1]), next_dir)
+                        transition_prob = float(tran_probs.get(succ_state, 0.0)) / total_prob
+                        new_actor_belief[goal][behavior_idx][next_pos[0], next_pos[1], next_dir] += prob * transition_prob
+
+        return new_actor_belief
+
+    def clear_transition_cache(self):
+        """Clear the transition probability cache."""
+        self.transition_prob_cache.clear()
+    
+    def get_cache_stats(self):
+        """Get cache statistics for monitoring performance."""
+        total_requests = self.cache_hits + self.cache_misses
+        hit_rate = self.cache_hits / total_requests if total_requests > 0 else 0
+        
+        return {
+            'cache_size': len(self.transition_prob_cache),
+            'cache_hits': self.cache_hits,
+            'cache_misses': self.cache_misses,
+            'hit_rate': hit_rate,
+            'total_requests': total_requests
+        }
 
         
     def compute_action(self, obs):
@@ -235,13 +367,12 @@ class BeliefUpdateObserver(BaseAgent):
         self.update_goal_belief() 
         # update the goal belief based on the belief of the observer, each entry is the conditional prob P(goal|obs history)
         # assume goal directed behavior, predict next step belief based on current belief
-        self.actor_belief = update_actor_belief_multi(self.actor_belief, self.goals, self.env, self.dist_matrix) 
+        self.actor_belief = self.update_actor_belief_multi_cached(self.actor_belief, self.goals) 
         # update the actor belief based on the goal belief, each entry is the joint prob P(state, goal, obs history)
         self.render_and_save(f'belief_update_test/actor_belief_step_{self.step}.png', obs)
 
-        #return self.greedy()
-
-        return self.mcts()
+        # Use greedy action selection instead of MCTS
+        return self.greedy()
 
     def augment_observation(self, obs):
         """
@@ -259,31 +390,234 @@ class BeliefUpdateObserver(BaseAgent):
 
 
 
-    def greedy(self, iterations = 100, exploration_weight = 1):
-        start_pos_state = (self.pos, self.dir)
-        # Aggregate belief across all behavior types for planning
-        start_actor_belief = {goal: aggregate_actor_belief(belief_list) for goal, belief_list in self.actor_belief.items()}
-        start_goal_belief = deepcopy(self.goal_belief)
-        root = MCTSNode(self.agent, start_pos_state, start_actor_belief, start_goal_belief, self.env, self.dist_matrix)
-
-        children = []
-        while not root.is_terminal() and not root.is_fully_expanded():
-            children.append(root.expand())
+    def greedy(self):
+        """
+        Greedy action selection: move directly towards the most likely position of the actor.
+        """
+        # Convert numpy arrays to hashable types
+        current_pos_state = (tuple(self.pos), int(self.dir))
+        
+        # Get the most likely actor position across all goals and behaviors
+        most_likely_actor_pos = self.get_most_likely_actor_position()
+        
+        if most_likely_actor_pos is None:
+            # If no actor position can be determined, stay in place
+            return Action.stay
+        
+        # Get possible observer actions
+        possible_actions = get_obs_successor(self.env, current_pos_state)
+        
+        if not possible_actions:
+            return Action.stay
+        
+        # Find the action that gets us closest to the most likely actor position
+        best_action = None
+        best_distance = float('inf')
+        
+        for action, next_pos_state in possible_actions:
+            next_pos = next_pos_state[0]
+            # Calculate Manhattan distance to the most likely actor position
+            distance = abs(next_pos[0] - most_likely_actor_pos[0]) + abs(next_pos[1] - most_likely_actor_pos[1])
+            
+            if distance < best_distance:
+                best_distance = distance
+                best_action = action
+        
+        return best_action if best_action is not None else Action.stay
     
-        scored_children = []
-        for child in children:
-            result = child.rollout()
-            scored_children.append((result, child))
-
-        best_result, best_child = max(scored_children, key=lambda x: x[0])
-        return best_child.action
+    def evaluate_action_utility(self, current_pos_state, next_pos_state, action):
+        """
+        Evaluate the utility of taking a specific action.
+        Combines information gain potential and goal-directed movement.
+        """
+        # Weight factors for different utility components
+        info_gain_weight = 1.0
+        goal_approach_weight = 0.5
+        entropy_reduction_weight = 2.0
+        
+        # 1. Information gain potential - how much new area will be observed
+        info_gain_score = self.calculate_information_gain(next_pos_state)
+        
+        # 2. Goal approach score - how close we get to likely target locations
+        goal_approach_score = self.calculate_goal_approach_score(current_pos_state, next_pos_state)
+        
+        # 3. Entropy reduction potential - preference for actions that reduce goal uncertainty
+        entropy_score = self.calculate_entropy_reduction_potential(next_pos_state)
+        
+        total_utility = (info_gain_weight * info_gain_score + 
+                        goal_approach_weight * goal_approach_score +
+                        entropy_reduction_weight * entropy_score)
+        
+        return total_utility
+    
+    def calculate_information_gain(self, next_pos_state):
+        """
+        Calculate potential information gain from observing from next_pos_state.
+        Higher scores for positions that can observe areas with high belief mass.
+        """
+        next_pos, next_dir = next_pos_state
+        
+        # Simulate the field of view from the next position
+        fov_mask = self.get_fov_mask(next_pos, Direction(next_dir))
+        
+        # Calculate total belief mass in the field of view
+        total_observable_belief = 0.0
+        for goal in self.goals:
+            goal_weight = self.goal_belief[goal]
+            for behavior_grid in self.actor_belief[goal]:
+                # Sum belief in the field of view area
+                for cell in np.argwhere(fov_mask):
+                    x, y = cell[0], cell[1]
+                    if x < behavior_grid.shape[0] and y < behavior_grid.shape[1]:
+                        total_observable_belief += goal_weight * np.sum(behavior_grid[x, y, :])
+        
+        return total_observable_belief
+    
+    def calculate_goal_approach_score(self, current_pos_state, next_pos_state):
+        """
+        Calculate how much closer the next position gets us to likely target locations.
+        """
+        current_pos = current_pos_state[0]
+        next_pos = next_pos_state[0]
+        
+        approach_score = 0.0
+        
+        for goal in self.goals:
+            goal_prob = self.goal_belief[goal]
+            
+            # Calculate average target position for this goal weighted by belief
+            expected_target_pos = self.get_expected_target_position(goal)
+            
+            if expected_target_pos is not None:
+                # Distance improvement score
+                current_dist = np.linalg.norm(np.array(current_pos) - np.array(expected_target_pos))
+                next_dist = np.linalg.norm(np.array(next_pos) - np.array(expected_target_pos))
+                
+                distance_improvement = current_dist - next_dist
+                approach_score += goal_prob * distance_improvement
+        
+        return approach_score
+    
+    def calculate_entropy_reduction_potential(self, next_pos_state):
+        """
+        Estimate how much this action could reduce goal belief entropy.
+        Prefer actions that have potential to disambiguate between goals.
+        """
+        current_entropy = compute_entropy(self.goal_belief)
+        
+        # Simple heuristic: actions that can observe multiple goals simultaneously
+        # have higher potential for entropy reduction
+        next_pos, next_dir = next_pos_state
+        fov_mask = self.get_fov_mask(next_pos, Direction(next_dir))
+        
+        observable_goals = 0
+        for goal in self.goals:
+            if fov_mask[goal[0], goal[1]]:
+                observable_goals += 1
+        
+        # Higher score for positions that can observe multiple goals
+        entropy_potential = observable_goals * current_entropy
+        
+        return entropy_potential
+    
+    def get_most_likely_actor_position(self):
+        """
+        Find the most likely position of the actor by aggregating probabilities across:
+        - All goals (weighted by goal belief)
+        - All behavior types 
+        - All directions at each position
+        Returns the position with the highest aggregated belief mass.
+        """
+        if not self.actor_belief:
+            return None
+            
+        # Get grid dimensions from any belief grid
+        sample_goal = next(iter(self.actor_belief))
+        sample_grid = self.actor_belief[sample_goal][0]
+        height, width, num_directions = sample_grid.shape
+        
+        # Create aggregated position belief map
+        aggregated_belief = np.zeros((height, width))
+        
+        # Aggregate across all goals, behavior types, and directions
+        for goal in self.goals:
+            goal_weight = self.goal_belief[goal]
+            
+            # Sum across all behavior types for this goal
+            for behavior_grid in self.actor_belief[goal]:
+                # Sum across all directions at each position
+                position_belief = np.sum(behavior_grid, axis=2)  # Sum over direction dimension
+                # Add to aggregated belief, weighted by goal probability
+                aggregated_belief += goal_weight * position_belief
+        
+        # Find position with maximum aggregated belief
+        if np.max(aggregated_belief) == 0:
+            return None
+            
+        max_pos = np.unravel_index(np.argmax(aggregated_belief), aggregated_belief.shape)
+        return max_pos
+    
+    def get_expected_target_position(self, goal):
+        """
+        Calculate the expected position of the target for a specific goal,
+        weighted by the belief distribution across all behavior types.
+        """
+        total_belief = 0.0
+        weighted_pos = np.array([0.0, 0.0])
+        
+        for behavior_grid in self.actor_belief[goal]:
+            for x in range(behavior_grid.shape[0]):
+                for y in range(behavior_grid.shape[1]):
+                    for d in range(behavior_grid.shape[2]):
+                        belief_mass = behavior_grid[x, y, d]
+                        if belief_mass > 0:
+                            total_belief += belief_mass
+                            weighted_pos += belief_mass * np.array([x, y])
+        
+        if total_belief > 0:
+            return weighted_pos / total_belief
+        else:
+            return None
+    
+    def get_fov_mask(self, pos, direction):
+        """
+        Get the field of view mask for a given position and direction.
+        Uses the same logic as the environment's visibility calculation.
+        """
+        fov_mask = np.zeros((self.env.width, self.env.height), dtype=bool)
+        
+        # Get field of view parameters
+        view_size = self.agent.view_size
+        
+        # Calculate field of view vectors
+        f_vec = direction.to_vec()
+        r_vec = np.array((-f_vec[1], f_vec[0]))
+        
+        # Calculate top-left corner of the field of view
+        top_left = np.array(pos) + f_vec * (view_size - 1) - r_vec * (view_size // 2)
+        
+        # Mark all cells in the field of view
+        for vis_j in range(view_size):
+            for vis_i in range(view_size):
+                # Calculate world coordinates
+                world_pos = top_left - (f_vec * vis_j) + (r_vec * vis_i)
+                abs_i, abs_j = int(world_pos[0]), int(world_pos[1])
+                
+                # Check bounds and mark visible
+                if 0 <= abs_i < self.env.width and 0 <= abs_j < self.env.height:
+                    # Check if cell is not blocked by walls
+                    if self.env.base_grid[abs_i, abs_j] == 0:  # 0 means free space
+                        fov_mask[abs_i, abs_j] = True
+        
+        return fov_mask
         
     def mcts(self, iterations = 100, exploration_weight = 1):
-        start_pos_state = (self.pos, self.dir)
+        # Convert numpy arrays to hashable types for cache keys
+        start_pos_state = (tuple(self.pos), int(self.dir))
         # Keep multi-behavior structure for planning
         start_actor_belief = deepcopy(self.actor_belief)
         start_goal_belief = deepcopy(self.goal_belief)
-        root = MCTSNode(self.agent, start_pos_state, start_actor_belief, start_goal_belief, self.env, self.dist_matrix)
+        root = MCTSNode(self.agent, start_pos_state, start_actor_belief, start_goal_belief, self.env, self.dist_matrix, observer_cache=self)
         
         for _ in range(iterations):
             node = root
@@ -613,7 +947,7 @@ def set_uniform_prob(grid, total_prob = 1):
 
 
 class MCTSNode:
-    def __init__(self, agent, pos_state, actor_belief, goal_belief, env, dist_matrix, action = None, parent=None):
+    def __init__(self, agent, pos_state, actor_belief, goal_belief, env, dist_matrix, action = None, parent=None, observer_cache=None):
         self.agent = agent
         self.dist_matrix = dist_matrix
         self.pos_state = pos_state  # The current game state
@@ -625,6 +959,7 @@ class MCTSNode:
         self.children = []  # List of child nodes
         self.visits = 0  # Number of times node has been visited
         self.value = 0  # Total value of the node
+        self.observer_cache = observer_cache  # Reference to observer for caching
 
     def is_fully_expanded(self):
         return len(self.children) == len(get_obs_successor(self.env, self.pos_state))
@@ -656,10 +991,13 @@ class MCTSNode:
                 new_goal_belief = self.update_goal_belief(new_actor_belief)
       
                 # goal directed update of the actor belief
-                new_actor_belief = update_actor_belief_multi(new_actor_belief, self.env.goals, self.env, self.dist_matrix)
+                if self.observer_cache:
+                    new_actor_belief = self.observer_cache.update_actor_belief_multi_cached(new_actor_belief, self.env.goals)
+                else:
+                    new_actor_belief = update_actor_belief_multi(new_actor_belief, self.env.goals, self.env, self.dist_matrix)
 
 
-                new_node = MCTSNode(self.agent, next_pos_state, new_actor_belief, new_goal_belief, self.env, self.dist_matrix, action = action, parent=self)
+                new_node = MCTSNode(self.agent, next_pos_state, new_actor_belief, new_goal_belief, self.env, self.dist_matrix, action = action, parent=self, observer_cache=self.observer_cache)
                 self.children.append(new_node)
                 return new_node
 
