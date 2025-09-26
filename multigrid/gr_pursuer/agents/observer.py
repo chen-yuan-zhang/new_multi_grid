@@ -271,7 +271,7 @@ class BeliefUpdateObserver(BaseAgent):
                 next_pos, next_dir = succ
                 formatted_successors.append((action, ((next_pos[0], next_pos[1]), next_dir)))
             # Uncomment the following line when neural predictor is available
-            # tran_probs = neuro_predict(self.env, goal, behavior_idx, formatted_successors, pos_state)
+            tran_probs = neuro_predict(self.env, goal, behavior_idx, formatted_successors, pos_state)
             
         
         if not use_neural:
@@ -285,7 +285,7 @@ class BeliefUpdateObserver(BaseAgent):
                     print("should not happen")
                     input()
                     tran_probs[succ_state] = 0
-        
+        assert len(tran_probs) == len(successors), "Transition probabilities not computed for all successors"
         # Cache the result
         self.transition_prob_cache[cache_key] = tran_probs
         return tran_probs
