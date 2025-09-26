@@ -23,5 +23,6 @@ docs/_build/
 .env
 .venv
 venv
+env.sh
 
 unsloth_compiled_cache/

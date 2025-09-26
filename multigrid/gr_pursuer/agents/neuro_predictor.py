@@ -166,6 +166,9 @@ def get_location_icon(location, map_size: int, image_array: np.ndarray, env):
 
     return patches[r, c]
 
+CALLING_COUNTER = 0
+TIME_CHECKPOINT = time.time()
+
 def neuro_predict(env, goal, behavior_type, successors, pos_state):
     """Predict action probabilities using the neuro predictor model.
     Args:
@@ -177,6 +180,20 @@ def neuro_predict(env, goal, behavior_type, successors, pos_state):
     """
     
     global ACTOR_PREDICTOR_MODEL, ACTOR_PREDICTOR_TOKENIZER, DEBUG_MODE
+    
+    global CALLING_COUNTER, TIME_CHECKPOINT
+    CALLING_COUNTER += 1
+    
+    if CALLING_COUNTER % 50 == 0:
+        current_time = time.time()
+        elapsed = current_time - TIME_CHECKPOINT
+        TIME_CHECKPOINT = current_time
+        
+        print(f"[neuro_predict] Called {CALLING_COUNTER} times. Time for last 50 calls: {elapsed:.2f}s")
+    
+     # Load model if not already loaded
+    
+    
     if ACTOR_PREDICTOR_MODEL is None or ACTOR_PREDICTOR_TOKENIZER is None:
         ACTOR_PREDICTOR_MODEL, ACTOR_PREDICTOR_TOKENIZER = load_actor_predictor_model()
         
