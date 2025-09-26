@@ -145,6 +145,7 @@ class Observer(BaseAgent):
 
 class BeliefUpdateObserver(BaseAgent):
     def __init__(self, env, init_actor_belief = None, init_goal_belief = None, use_neural_predictor = False):
+        # For Sukai: set use_neural_predictor = True to use neural predictor
         
         super().__init__(env.observer)
 
@@ -271,8 +272,7 @@ class BeliefUpdateObserver(BaseAgent):
                 formatted_successors.append((action, ((next_pos[0], next_pos[1]), next_dir)))
             # Uncomment the following line when neural predictor is available
             # tran_probs = neuro_predict(self.env, goal, behavior_idx, formatted_successors, pos_state)
-            # For now, fall back to symbolic model
-            use_neural = False
+            
         
         if not use_neural:
             # Symbolic model
@@ -894,7 +894,7 @@ def update_actor_belief_multi(actor_belief, goals, env, dist_matrix, beta=BETA):
                     formatted_successors.append((action, ((next_pos[0], next_pos[1]), next_dir)))
 
                 # # Get transition probabilities from neural predictor
-                # # for sukai: uncomment the following line and symbolic model part to use the neural predictor
+                # # uncomment the following line and symbolic model part to use the neural predictor
                 # tran_probs = neuro_predict(env, goal, behavior_idx, formatted_successors, pos_state)
 
                 # symbolic model for testing
