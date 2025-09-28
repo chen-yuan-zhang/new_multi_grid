@@ -60,7 +60,7 @@ def belief_tracking_demo():
     for step in range(max_steps):
         print(f"\n--- Step {step+1} ---")
         
-        # Observer makes action based on beliefs (MCTS planning)
+        # Observer makes action based on beliefs (greedy planning)
         observer_action = belief_observer.compute_action(obs[0])
         
         # Target makes some action (in practice this would be unknown to observer)
@@ -75,7 +75,7 @@ def belief_tracking_demo():
         
         # IMPORTANT: Augment observations with belief distributions
         augmented_obs = belief_observer.augment_observation(next_obs)
-        
+        breakpoint()
         # Display current beliefs
         goal_belief = augmented_obs[0]['goal_belief']
         actor_belief = augmented_obs[0]['actor_belief']
@@ -84,10 +84,13 @@ def belief_tracking_demo():
         print(f"Observer action: {observer_action}, Target action: {target_action}")
         print(f"Goal beliefs: {dict((str(k), f'{v:.3f}') for k, v in goal_belief.items())}")
         
-        # Show multi-behavior actor belief for first goal
-        first_goal = list(actor_belief.keys())[0]
-        behavior_sums = [f'{np.sum(grid):.4f}' for grid in actor_belief[first_goal]]
-        print(f"Actor belief for goal {first_goal} (by behavior): {behavior_sums}")
+        # Show multi-behavior actor belief for each goal
+        for goal in actor_belief.keys():
+            behavior_sums = [f'{np.sum(grid):.4f}' for grid in actor_belief[goal]]
+            print(f"Actor belief for goal {goal} (by behavior): {behavior_sums}")
+        # first_goal = list(actor_belief.keys())[0]
+        # behavior_sums = [f'{np.sum(grid):.4f}' for grid in actor_belief[first_goal]]
+        # print(f"Actor belief for goal {first_goal} (by behavior): {behavior_sums}")
         
         # Check if episode is done
         if any(terminations.values()) or any(truncations.values()):
@@ -114,9 +117,24 @@ def belief_tracking_demo():
     print("\nAccess specific behavior beliefs:")
     actor_belief = final_augmented_obs[0]['actor_belief']
     first_goal = list(actor_belief.keys())[0]
-    print(f"  Goal {first_goal}:")
-    for i, grid in enumerate(actor_belief[first_goal]):
-        print(f"    Behavior {i}: shape={grid.shape}, sum={np.sum(grid):.6f}")
+    for idx, goal in enumerate(actor_belief.keys()):
+        print(f"  Goal {goal}:")
+        grid_sums = [np.sum(grid) for grid in actor_belief[goal]]
+        # check if each grid are identical to each other 
+        is_identical = all(np.array_equal(actor_belief[goal][0], grid) for grid in actor_belief[goal])
+        print(f"    Are all behavior grids identical? {'Yes' if is_identical else 'No'}")
+        # normalize grid_sums 
+        total = sum(grid_sums)
+        if total > 0:
+            grid_sums = [s / total for s in grid_sums]
+        else:
+            grid_sums = [0 for s in grid_sums]
+            
+        for i, s in enumerate(grid_sums):
+            print(f"    Behavior {i}: normalized sum={s:.6f}")
+       
+        print("=== end of goal ===")
+  
     
     print("\n✅ Demo completed!")
     print("   Key takeaways:")

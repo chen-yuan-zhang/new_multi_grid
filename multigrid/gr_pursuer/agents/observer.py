@@ -1,5 +1,7 @@
 from .base import BaseAgent
 from ..astar import astar, get_successor, execute_action, get_obs_successor, get_reverse_successor
+import matplotlib
+matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
 import math
@@ -13,7 +15,6 @@ import os
 from collections import deque
 from copy import deepcopy
 
-from .neuro_predictor import neuro_predict
 
 
 # MODES
@@ -148,6 +149,9 @@ class BeliefUpdateObserver(BaseAgent):
         # For Sukai: set use_neural_predictor = True to use neural predictor
         
         super().__init__(env.observer)
+
+        if use_neural_predictor:
+            from .neuro_predictor import neuro_predict
 
         self.env = env
         self.agent.name = "BeliefUpdateObserver"
@@ -357,7 +361,7 @@ class BeliefUpdateObserver(BaseAgent):
         }
 
         
-    def compute_action(self, obs):
+    def compute_action(self, obs, render_and_save=True, get_action=True):
         self.step += 1
         self.pos = obs["observer_pos"]
         self.dir = obs["observer_dir"]
@@ -369,10 +373,14 @@ class BeliefUpdateObserver(BaseAgent):
         # assume goal directed behavior, predict next step belief based on current belief
         self.actor_belief = self.update_actor_belief_multi_cached(self.actor_belief, self.goals) 
         # update the actor belief based on the goal belief, each entry is the joint prob P(state, goal, obs history)
-        self.render_and_save(f'belief_update_test/actor_belief_step_{self.step}.png', obs)
+        if render_and_save:
+            self.render_and_save(f'belief_update_test/actor_belief_step_{self.step}.png', obs)
 
         # Use greedy action selection instead of MCTS
-        return self.greedy()
+        if get_action:
+            return self.greedy()
+        else:
+            return None
 
     def augment_observation(self, obs):
         """
@@ -774,12 +782,13 @@ class BeliefUpdateObserver(BaseAgent):
 
         total = sum(self.goal_belief.values())
         if total == 0:
-            print("should not happen")
+            print("should not happen update_goal_belief's total=0")
             print(self.goal_belief)
             for goal in self.goals:
                 for behavior_idx, behavior_grid in enumerate(self.actor_belief[goal]):
                     print(f"Goal {goal}, behavior {behavior_idx}:", np.where(behavior_grid > 0))
-            input()
+                self.goal_belief[goal] = 1 / len(self.goals)
+            # input()
         for goal in self.goals:
             self.goal_belief[goal] /= total
             #print(goal,self.goal_belief[goal])
