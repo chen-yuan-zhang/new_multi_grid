@@ -84,10 +84,34 @@ def belief_tracking_demo():
         print(f"Observer action: {observer_action}, Target action: {target_action}")
         print(f"Goal beliefs: {dict((str(k), f'{v:.3f}') for k, v in goal_belief.items())}")
         
-        # Show multi-behavior actor belief for first goal
+        # Show multi-behavior actor belief for first goal (normalized)
         first_goal = list(actor_belief.keys())[0]
-        behavior_sums = [f'{np.sum(grid):.4f}' for grid in actor_belief[first_goal]]
-        print(f"Actor belief for goal {first_goal} (by behavior): {behavior_sums}")
+        
+        # Check if we're in log-space by looking at the values
+        first_grid = actor_belief[first_goal][0]
+        is_log_space = np.any(first_grid < 0) and np.all(first_grid[first_grid > -np.inf] < 0)
+        
+        if is_log_space:
+            # Handle log-space values
+            behavior_sums = []
+            for grid in actor_belief[first_goal]:
+                # Convert log probabilities to regular space for summing
+                valid_log_probs = grid[grid > -np.inf]
+                if len(valid_log_probs) > 0:
+                    regular_sum = np.sum(np.exp(np.clip(valid_log_probs, -700, 700)))
+                    behavior_sums.append(regular_sum)
+                else:
+                    behavior_sums.append(0.0)
+        else:
+            # Regular space values
+            behavior_sums = [np.sum(grid) for grid in actor_belief[first_goal]]
+        
+        total_sum = sum(behavior_sums)
+        if total_sum > 0:
+            normalized_behavior_sums = [f'{(sum_val / total_sum):.4f}' for sum_val in behavior_sums]
+        else:
+            normalized_behavior_sums = [f'{sum_val:.4f}' for sum_val in behavior_sums]
+        print(f"Actor belief for goal {first_goal} (by behavior, normalized): {normalized_behavior_sums}")
         
         # Check if episode is done
         if any(terminations.values()) or any(truncations.values()):
@@ -115,8 +139,35 @@ def belief_tracking_demo():
     actor_belief = final_augmented_obs[0]['actor_belief']
     first_goal = list(actor_belief.keys())[0]
     print(f"  Goal {first_goal}:")
+    
+    # Calculate raw sums and normalized values (handle log-space)
+    first_grid = actor_belief[first_goal][0]
+    is_log_space = np.any(first_grid < 0) and np.all(first_grid[first_grid > -np.inf] < 0)
+    
+    if is_log_space:
+        # Handle log-space values
+        behavior_sums = []
+        for grid in actor_belief[first_goal]:
+            # Convert log probabilities to regular space for summing
+            valid_log_probs = grid[grid > -np.inf]
+            if len(valid_log_probs) > 0:
+                regular_sum = np.sum(np.exp(np.clip(valid_log_probs, -700, 700)))
+                behavior_sums.append(regular_sum)
+            else:
+                behavior_sums.append(0.0)
+    else:
+        # Regular space values
+        behavior_sums = [np.sum(grid) for grid in actor_belief[first_goal]]
+    
+    total_sum = sum(behavior_sums)
+    
     for i, grid in enumerate(actor_belief[first_goal]):
-        print(f"    Behavior {i}: shape={grid.shape}, sum={np.sum(grid):.6f}")
+        raw_sum = behavior_sums[i]
+        if total_sum > 0:
+            normalized = raw_sum / total_sum
+            print(f"    Behavior {i}: shape={grid.shape}, sum={raw_sum:.6f}, normalized={normalized:.4f}")
+        else:
+            print(f"    Behavior {i}: shape={grid.shape}, sum={raw_sum:.6f}, normalized=0.0000")
     
     print("\n✅ Demo completed!")
     print("   Key takeaways:")
