@@ -1,5 +1,7 @@
 from .base import BaseAgent
 from ..astar import astar, get_successor, execute_action, get_obs_successor, get_reverse_successor
+import matplotlib
+matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
 import math
@@ -23,6 +25,9 @@ class BeliefUpdateObserver(BaseAgent):
         # For Sukai: set use_neural_predictor = True to use neural predictor
         
         super().__init__(env.observer)
+
+        if use_neural_predictor:
+            from .neuro_predictor import neuro_predict
 
         self.env = env
         self.agent.name = "BeliefUpdateObserver"
@@ -351,7 +356,7 @@ class BeliefUpdateObserver(BaseAgent):
         }
 
         
-    def compute_action(self, obs):
+    def compute_action(self, obs, render_and_save=True, get_action=True):
         self.step += 1
         
         # Access observer's observation (agent 0) from the multi-agent observation dict
@@ -374,7 +379,10 @@ class BeliefUpdateObserver(BaseAgent):
         # self.render_and_save(f'belief_update_test/actor_belief_step_{self.step}.png', obs)
 
         # Use greedy action selection instead of MCTS
-        return self.greedy()
+        if get_action:
+            return self.greedy()
+        else:
+            return None
 
     def augment_observation(self, obs):
         """
