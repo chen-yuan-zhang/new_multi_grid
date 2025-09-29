@@ -10,9 +10,71 @@ from math import ceil
 from collections import deque, defaultdict
 from typing import Literal,Dict, Tuple, List, Optional, Set, Any
 
-
-
 class LockTarget(BaseAgent):
+
+    def __init__(self, env) -> None:
+
+        super().__init__(env.target)
+        self.env = env
+        self.goal = env.goal
+        self.goals = env.goals
+        self.plans = env.plans
+        self.goal_room = env.goal_room
+        self.abs = env.abs
+
+
+        self.path = None
+        self.hallway_col = env.num_cols // 2
+        self.index = 0
+        self.enable_hidden_cost = env.enable_hidden_cost
+        if self.enable_hidden_cost:
+            self.hidden_cost = env.hidden_cost
+        else:
+            self.hidden_cost = np.ones((env.width, env.height), dtype=np.float32)
+
+
+    def compute_action(self, obs):
+        pos = self.env.target.state.pos
+        dir = self.env.target.state.dir
+        held = self.env.target.carrying
+
+        start_rid = _rid_from_xy(self.env,*pos,self.hallway_col)
+
+        for room in self.abs["rooms"]:
+            self.abs["rooms"][room]["keys"] = []
+        for x in range(self.env.width):
+            for y in range(self.env.height):
+                obj = self.env.grid.get(x,y)
+                if obj and obj.type == "key":
+                    room = _rid_from_xy(self.env,x,y,self.hallway_col)
+                    self.abs["rooms"][room]["keys"].append({'color':obj.color,'pos':(x,y)})
+                   
+        for door in self.abs["edges"]:
+            obj = self.env.grid.get(*door["pos"])
+            if obj:
+                door["locked"] = (self.env.grid.get(*door["pos"]).state == "locked")
+            else:
+                door["locked"] = False
+
+        plan_events = _plan_onekey_persist_open(self.abs, start_rid,self.goal_room, held = held)
+        if plan_events != []:
+            evt = plan_events[0]
+            ety = plan_events[0]["type"] 
+            if ety == "pickup":
+                kpos = tuple(evt["pos"]["value"])
+                path = astar_key((pos, dir), kpos, self.env, self.hidden_cost)
+                return path[1][0]
+    
+            elif ety == "open":
+                dpos = tuple(evt["pos"]["value"])
+                path = astar_open((pos, dir), dpos, self.env, self.hidden_cost)
+                return path[1][0] 
+    
+        # --- 如果所有事件都完成，走终点 ---
+        path = astar((pos, dir), self.goal, self.env, self.hidden_cost)
+        return path[1][0]
+
+class OldLockTarget(BaseAgent):
 
     def __init__(self, env) -> None:
 
@@ -55,7 +117,7 @@ class LockTarget(BaseAgent):
             return True
         return False
         
-    def compute_action(self, obs,env):
+    def compute_action(self, obs):
         pos = self.env.target.state.pos
         dir = self.env.target.state.dir
     
@@ -92,286 +154,179 @@ class LockTarget(BaseAgent):
         return path[1][0]
 
 
-class AstarTarget(BaseAgent):
 
-    def __init__(self, env) -> None:
 
-        super().__init__(env.target)
-        self.env = env
-        self.goal = env.goal
-        self.goals = env.goals
+def _map_rid(c: int, r: int, hallway_col: int | None):
+    if hallway_col is not None and c == hallway_col:
+        return ("HALL",)   # 统一的走廊节点
+    return (c, r)
 
-        self.path = None
+def _rid_from_xy(env, x, y, hallway_col):
+    # 找到 (x,y) 落在哪个原始 room (c,r)
+    for r in range(env.num_rows):
+        for c in range(env.num_cols):
+            room = env.get_room(c, r)
+            x0, y0 = room.top
+            w,  h  = room.size
+            if x0 <= x < x0 + w and y0 <= y < y0 + h:
+                return _map_rid(c, r, hallway_col)  # 走廊列合并成 ('HALL',)
+    # 万一没命中，保守返回 None（调用处做兜底）
+    return None
 
-        self.index = 0
-        self.enable_hidden_cost = env.enable_hidden_cost
-        if self.enable_hidden_cost:
-            self.hidden_cost = env.hidden_cost
+
+
+# 邻接：adj[r] = [(nbr, color, eid)] 
+def _build_neighbors(abs_graph) -> Dict[Any, List[Tuple[Any, Any, int]]]: 
+    adj = defaultdict(list) 
+    for eid, e in enumerate(abs_graph["edges"]): 
+        u, v = e["u"], e["v"] 
+        col = e.get("color", None) 
+        adj[u].append((v, col, eid)) 
+        adj[v].append((u, col, eid)) 
+    return adj
+
+
+# —— 颜色统一（Enum/字符串都支持）—— #
+def _canon(c):
+    if c is None: return None
+    return c.name if hasattr(c, "name") else str(c)
+
+# —— 取钥匙位置（容错：可能没有pos）—— #
+def _key_position(k):
+    # new format: {"color":..., "pos":(x,y)}
+    if isinstance(k, dict) and "pos" in k:
+        return ("xy", tuple(k["pos"]))
+    # fallback: 无位置信息
+    return (None, None)
+
+# —— 统一遍历房间内钥匙（返回列表[(color, kobj)]，kobj可为原字典或颜色字符串）—— #
+def _iter_room_keys(room_dict):
+    keys_raw = list(room_dict.get("keys", []))
+    out = []
+    for k in keys_raw:
+        if isinstance(k, dict):
+            color = _canon(k.get("color", None))
+            out.append((color, k))
         else:
-            self.hidden_cost = np.ones((env.grid_size, env.grid_size), dtype=np.float32)
+            # legacy plain color
+            out.append((_canon(k), k))
+    return out
 
-    def compute_action(self, obs):
-        pos = self.agent.state.pos
-        dir = self.agent.state.dir
+# —— 帮助：安全取门位置信息 —— #
+def _edge_position(abs_graph, eid):
+    e = abs_graph["edges"][eid]
+    # 优先使用显式坐标/位置
+    for key in ("pos", "door_xy", "xy", "at"):
+        if key in e:
+            return {"type": "xy", "value": e[key]}
+    # 退化：用房间端点描述
+    return {"type": "rooms", "value": (e.get("u"), e.get("v"))}
 
-
-        if self.path is None:
-            self.path = astar((pos, dir), self.goal, self.env, self.hidden_cost)
-            self.index = 0
-
-
-        self.index += 1
-        return self.path[self.index][0]
-
-class eGreedyTarget(BaseAgent):
-
-    def __init__(self, env) -> None:
-
-        super().__init__(env.target)
-        self.env = env
-        self.goal = env.goal
-        self.goals = env.goals
-
-        self.path = None
-
-        self.index = 0
-        self.enable_hidden_cost = env.enable_hidden_cost
-        if self.enable_hidden_cost:
-            self.hidden_cost = env.hidden_cost
-        else:
-            self.hidden_cost = np.ones((env.grid_size, env.grid_size), dtype=np.float32)
-
-    def compute_action(self, obs, epsilon=0.2):
-        pos = self.agent.state.pos
-        dir = self.agent.state.dir
-        successors = get_successor(self.env,(pos, dir))
-        legal_actions = []
-        for action, _ in successors:
-            legal_actions.append(action)
-        
-        # ε-greedy
-        if random.random() < epsilon:
-            self.path = None
-            #print("choose random action")
-            return random.choice(legal_actions)
-            
-        if self.path is None:
-            #print(self.env.goal)
-            #print(self.goal)
-            self.path = astar((pos, dir), self.goal, self.env, self.hidden_cost)
-            self.index = 0
+# —— 初始已开门mask（无色门或 locked=False 视为已开）—— #
+def _initial_open_mask(abs_graph) -> int:
+    #print(abs_graph)
+    mask = 0
+    for eid, e in enumerate(abs_graph["edges"]):
+        col = e.get("color", None)
+        locked = e.get("locked", True)
+        if _canon(col) is None or not locked:
+            mask |= (1 << eid)
+    return mask
 
 
-        self.index += 1
-        return self.path[self.index][0]
+# —— 单目标：单钥匙 + 持久开门 —— #
+def _plan_onekey_persist_open(abs_graph, start_rid, goal_rid, held = None,open_mask = None, ):
+    """
+    返回：events（按时间顺序）
+    events 元素两类：
+      1) {'type':'pickup', 'room': rid, 'key': 'red', 'pos': {'type':'xy','value':(x,y)}|{'type':None,'value':None}}
+      2) {'type':'open',   'eid': eid, 'color':'red',
+          'from': u, 'to': v, 'pos': {...}}
+    若不可达：返回 None
+    """
+    rooms = abs_graph["rooms"]
+    adj   = _build_neighbors(abs_graph)
+    if held is not None and hasattr(held, "color"):
+        held = held.color
 
+    if open_mask is None:
+        open_mask = _initial_open_mask(abs_graph)
 
-        
-        
-        # # 1) locate start/goal rooms (rid)
-        # pos = self.agent.state.pos
-        # start_rid = xy_to_rid(self.env, *pos)
-        # goal_rid  = xy_to_rid(self.env, *tuple(self.goal))
-        
-        # # 2) build/reuse high-level plan (events)
-        # #self._build_or_reuse_plan(start_rid, goal_rid)
-        # events = _plan_onekey_persist_open(self.env.abs, start_rid, goal_rid)
-        # print(events)
+    start_state = (start_rid, held, open_mask)
+    q = deque([start_state])
 
-        # if not events:
-        #     path = astar((pos, self.agent.state.dir), self.goal, self.env, self.hidden_cost)
-        #     return path[1][0]
-    
-        # evt = events[0]
-        # ety = evt.get("type")
-        # exy = tuple(evt.get("pos", {}).get("value")) if evt.get("pos") else None
-    
-        # # --- 根据事件类型执行 ---
-        # if ety == "pickup":
-        #     # 路径规划到钥匙
-        #     path = astar_key((pos, self.agent.state.dir), exy, self.env, self.hidden_cost)
-        #     return path[1][0]
-    
-        # elif ety == "open":
-        #     path = astar_open((pos, self.agent.state.dir), exy, self.env, self.hidden_cost)
-        #     return path[1][0]
+    prev  = {start_state: None}
+    prev_evt: Dict[Tuple[Any, Optional[Any], int], Dict[str, Any]] = {}
 
-        # else:
-        #     return 0
-        
-        # # -------- one-time runtime init --------
-        # if not hasattr(self, "_rt_inited") or not getattr(self, "_rt_inited"):
-        #     self.plan_events = list(self.plans.get(self.goal_room, []))  # [{'type': 'pickup'|'open', ...}, ...]
-        #     self.plan_idx    = 0
-        #     self.final_phase = False
-        #     self.held_color  = None
-        #     self._rt_inited  = True
-    
-        # # -------- helpers (MiniGrid/MultiGrid-style) --------
-        # def _tile_at(xy):
-        #     grid = getattr(self.env, "grid", None)
-        #     if grid is None or xy is None:
-        #         return None
-        #     x, y = int(xy[0]), int(xy[1])
-        #     try:
-        #         return grid.get(x, y)
-        #     except Exception:
-        #         return None
-    
-        # # def _is_key_tile(tile, color=None):
-        # #     if tile is None:
-        # #         return False
-        # #     return (getattr(tile, "type", None) == "key" and
-        # #             (color is None or getattr(tile, "color", None) == color))
-    
-        # def _door_is_open(xy):
-        #     t = _tile_at(xy)
-        #     return (getattr(t, "type", None) == "door") and bool(getattr(t, "is_open", False))
-            
-        # def _pickup_color_if_on_key():
-        #     """Update held_color by checking what the agent is actually carrying."""
-        #     carried = getattr(getattr(self.agent, "state", None), "_carried_obj", None)
-        
-        #     # unwrap numpy array case: array(None) -> None
-        #     if isinstance(carried, np.ndarray):
-        #         try:
-        #             carried = carried.item()
-        #         except Exception:
-        #             carried = None
-        
-        #     if carried is None:
-        #         self.held_color = None
-        #     else:
-        #         # assume carried has attribute 'color' (like Key object in MiniGrid)
-        #         self.held_color = getattr(carried, "color", None)
-    
-        # # # update held key by observation of current tile
-        # _pickup_color_if_on_key()
-    
-        # # # -------- online event skipping (back-to-front) --------
-        # # if (not self.final_phase) and self.plan_idx < len(self.plan_events):
-        # #     # new_idx 至少是当前 plan_idx；遇到已开的门就推进到该门的后一个事件
-        # #     new_idx = self.plan_idx
-        # #     j = len(self.plan_events) - 1
-        # #     while j >= self.plan_idx:
-        # #         evtj = self.plan_events[j]
-        # #         if evtj.get("type") == "open":
-        # #             exyj = tuple(evtj.get("pos", {}).get("value")) if evtj.get("pos") else None
-        # #             if exyj is not None and _door_is_open(exyj):
-        # #                 # 跳到“门后面的下一个事件”，并保留更大的推进结果
-        # #                 new_idx = max(new_idx, j + 1)
-        # #         j -= 1
-        # #     # 统一推进（一次性跳过一串“已开门”和其前导的 pickup）
-        # #     self.plan_idx = new_idx
-    
-        # # -------- decide target now (fresh planning each step) --------
-        # path = None
-        # #print("plan_idx: ",self.plan_idx)
-        # if (not self.final_phase) and self.plan_idx < len(self.plan_events):
-        #     evt = self.plan_events[self.plan_idx]
-        #     ety = evt.get("type")
-        #     exy = tuple(evt.get("pos", {}).get("value")) if evt.get("pos") else None
-        #     print(exy)
-    
-        #     if ety == "pickup" and exy is not None:
-        #         target_color = evt.get("key") or evt.get("color")
-            
-        #         # 1) 若手上已经有对应颜色的钥匙 → 跳过
-        #         if target_color is not None and self.held_color == target_color:
-        #             self.plan_idx += 1
-        #             path = None
-            
-        #         else:
-        #             # 2) 检查目标格子是否仍然是该颜色的钥匙
-        #             t = _tile_at(exy)
-        #             is_key_here = (
-        #                 t is not None
-        #                 and getattr(t, "type", None) == "key"
-        #                 and (target_color is None or getattr(t, "color", None) == target_color)
-        #             )
-            
-        #             if not is_key_here:
-        #                 self.plan_idx += 1
-        #                 path = None
-        #             else:
-        #                 # 3) 仍然存在目标钥匙 → 规划去捡
-        #                 path = astar_key((pos, dir), exy, self.env, self.hidden_cost,
-        #                                  agent_idx=0, version=True)
-    
-        #     elif ety == "open" and exy is not None:
-        #         # if door turned open since last check, consume and fall back to final-phase/next event
-        #         if _door_is_open(exy):
-        #             self.plan_idx += 1
-        #             path = None
-        #         else:
-        #             path = astar_open((pos, dir), exy, self.env, self.hidden_cost)
-        #     # consume the event only when its precondition becomes true on arrival,
-        #     # which is naturally handled by the next-step skip loop.
-        # else:
-        #     # no more events: final phase -> go straight to goal
-        #     self.final_phase = True
-        #     path = astar((pos, dir), self.goal, self.env, self.hidden_cost)
-    
-        # # -------- safe fallback --------
-        # if not path or len(path) == 0:
-        #     return Action.stay
-    
-        # # -------- execute ONLY ONE action; replan next step --------
-        # #print(path)
-        # act = path[1][0]  # path like [(action, ...), ...]
-        # return act
+    while q:
+        rid, held, open_mask = q.popleft()
+        if rid == goal_rid:
+            # 回溯事件
+            path_events: List[Dict[str, Any]] = []
+            cur = (rid, held, open_mask)
+            while prev[cur] is not None:
+                evt = prev_evt.get(cur)
+                if evt:
+                    path_events.append(evt)
+                cur = prev[cur]
+            path_events.reverse()
+            return path_events
 
-    
-    # def compute_action(self, obs):
-    #     # 当前真实位置/朝向每步更新
-    #     pos = self.agent.state.pos
-    #     dir = self.agent.state.dir
-    
-    #     # ——— 初始化一次性的运行时状态 ———
-    #     if not hasattr(self, "_rt_inited") or not getattr(self, "_rt_inited"):
-    #         self.plan_events   = list(self.plans.get(self.goal_room, []))  # 事件序列
-    #         self.plan_idx      = 0             # 当前处理到第几个事件
-    #         self.held_color    = None          # 手里拿的钥匙颜色（字符串）
-    #         self.final_phase   = False         # 是否已经开始“最后到 goal”的阶段
-    #         self.path          = None          # 当前子路径（动作序列）
-    #         self.index         = 0             # 当前子路径内的动作索引
-    #         self._rt_inited    = True
-    #     print(self.plan_events)
-    
-    #     # ——— 如果没有子路径或走完了，就生成下一段子路径 ———
-    #     def _start_next_subpath():
-    #         # 还有事件没消费：生成该事件的子路径
-    #         if (not self.final_phase) and self.plan_idx < len(self.plan_events):
-    #             evt = self.plan_events[self.plan_idx]
-    #             self.plan_idx += 1
-    #             if evt["type"] == "pickup":
-    #                 key_xy = tuple(evt["pos"]["value"])  # 目标钥匙坐标
-    #                 self.path = astar_key((pos, dir), key_xy, self.env, self.hidden_cost)
-    #                 self.index = 1
-    #                 return True
-    #             elif evt["type"] == "open":
-    #                 door_xy = tuple(evt["pos"]["value"])  # 门坐标
-    #                 self.path = astar_open((pos, dir), door_xy, self.env, self.hidden_cost)
-    #                 self.index = 1
-    #                 return True
-    #         # 没有事件了：进入最终阶段，从当前位置直接到 self.goal
-    #         print("Yeah!")
-    #         self.final_phase = True
-    #         self.path = astar((pos, dir), self.goal, self.env, self.hidden_cost)
-    #         self.index = 1
-    #         return True
-    
-    #     # 若没有路径或已走完，创建下一段
-    #     if self.path is None or self.index >= len(self.path):
-    #         ok = _start_next_subpath()
-    #         if not ok or self.path is None or len(self.path) == 0:
-    #             # 防御式：没有可走的动作就停一下（按你环境的“无动作/Done”定义替换）
-    #             return self.actions.done if hasattr(self, "actions") and hasattr(self.actions, "done") else 0
-    
-    #     # ——— 输出当前子路径的下一个动作，并前进一步 ———
-    #     #print(self.path)
-    #     act = self.path[self.index][0]   # 你的 path 结构是 [(action, ...), ...]
-    #     self.index += 1
-    #     return act
+        # ---- 先移动（可能开门） ----
+        for nb, col, eid in adj[rid]:
+            ccol = _canon(col)
+            opened = (open_mask >> eid) & 1
 
+            if opened or ccol is None or ccol == _canon(held):
+                next_open = open_mask
+                evt = None
+                if (not opened) and (ccol is not None) and (ccol == _canon(held)):
+                    next_open |= (1 << eid)
+                    pos_info = _edge_position(abs_graph, eid)
+                    evt = {
+                        "type":  "open",
+                        "eid":   eid,
+                        "color": ccol,
+                        "from":  rid,
+                        "to":    nb,
+                        "pos":   pos_info
+                    }
 
+                ns = (nb, held, next_open)
+                if ns not in prev:
+                    prev[ns] = (rid, held, open_mask)
+                    prev_evt[ns] = evt
+                    q.append(ns)
+
+        # ---- 在当前房间拿/换钥匙（零代价扩展） ----
+        room_keys = _iter_room_keys(rooms[rid])
+        if room_keys:
+            if held is None:
+                for kcolor, kraw in room_keys:
+                    ns = (rid, kcolor, open_mask)
+                    if ns not in prev:
+                        prev[ns] = (rid, held, open_mask)
+                        kpos_type, kpos_val = _key_position(kraw)
+                        prev_evt[ns] = {
+                            "type": "pickup",
+                            "room": rid,
+                            "key":  kcolor,
+                            "pos":  {"type": kpos_type, "value": kpos_val}
+                        }
+                        q.append(ns)
+            else:
+                for kcolor, kraw in room_keys:
+                    if kcolor != _canon(held):
+                        ns = (rid, kcolor, open_mask)
+                        if ns not in prev:
+                            prev[ns] = (rid, held, open_mask)
+                            kpos_type, kpos_val = _key_position(kraw)
+                            prev_evt[ns] = {
+                                "type": "pickup",
+                                "room": rid,
+                                "key":  kcolor,  # 换到的新钥匙
+                                "pos":  {"type": kpos_type, "value": kpos_val}
+                            }
+                            q.append(ns)
+
+    return []

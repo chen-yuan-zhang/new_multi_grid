@@ -6,17 +6,16 @@ import matplotlib.pyplot as plt
 
 import math
 import numpy as np
-from multigrid.core.constants import DIR_TO_VEC, Direction,OBJECT_TO_IDX,COLOR_TO_IDX
+from multigrid.core.constants import DIR_TO_VEC, Direction,OBJECT_TO_IDX,COLOR_TO_IDX,Type
 from multigrid.core.actions import Action
-from multigrid.utils.obs import gen_obs_grid_encoding
-from multigrid.core.constants import Type
 import random
 import os
 from collections import deque,defaultdict
 from copy import deepcopy,copy
 from typing import Any, Dict, List, Optional, Tuple
 
-
+def manhattan_distance(p1, p2):
+    return abs(p1[0] - p2[0]) + abs(p1[1] - p2[1])
 
 
 class Observer(BaseAgent):
@@ -46,7 +45,7 @@ class Observer(BaseAgent):
             for plan in self.high_level_length[goal_room][1]:
                 self.goal_length[goal_room] += self.dist_matrix[(pos,dir),plan['pos']['value']]
                 pos = plan['pos']['value']
-            self.goal_length[goal_room] += self.dist_matrix[(pos,dir),goal]
+            #self.goal_length[goal_room] += self.dist_matrix[(pos,dir),goal]
 
         ###——————————————————————————————————————————————————————————————————————————————————————
 
@@ -56,13 +55,24 @@ class Observer(BaseAgent):
         else:
             self.hidden_cost = np.ones((env.width, env.height), dtype=np.float32)
 
-        # for goal_room in self.goal_rooms:
-        #     print(goal_room, self.goal_length[goal_room])
+        for goal_room in self.goal_rooms:
+            print(goal_room, self.goal_length[goal_room])
 
     #current_task_options_onekey_persist_open(self.abs,_rid_from_xy(self.env,x,y,self.hallway_col)
     # 从此地出发，有哪些可做任务（拿钥匙，开门）subgoal
 
-
+    def find_all_keys(self,data,color):
+        all_keys = []
+        for room, info in data.items():
+            for key in info.get("keys", []):
+                if color ==  key["color"]:
+                    all_keys.append({
+                        "room": room,
+                        "color": key["color"],
+                        "pos": key["pos"]
+                    })
+        return all_keys
+        
     def length_compute(self,pos,dir,plan_list):
         total_length = 0
         for plan in plan_list:
@@ -71,66 +81,120 @@ class Observer(BaseAgent):
         return total_length
 
     def compute_action(self, obs):
+        pos = self.env.target.pos
+        dir = self.env.target.dir
         held = self.env.target.carrying
+        obs_held = self.env.observer.carrying
         obs_pos = self.env.observer.pos
         obs_dir = self.env.observer.dir
-        obs_held = self.env.observer.carrying
+        print(self.goal_rooms)
         goal_recognition = self.goal_recognition()
-        subgoal_expected_payoff = {}
+        print(goal_recognition)
         
-        for plan in self.current_palns:
-            #print(plan)
-            start_rid = _rid_from_xy(self.env,*plan['pos']['value'],self.hallway_col)
-            if plan['type'] == 'pickup':
-                for goal_room_idx in range(len(self.goal_rooms)):
-                    goal_room = self.goal_rooms[goal_room_idx]
-                    plan_list = [plan] + _plan_onekey_persist_open(self.abs, start_rid,goal_room, held = plan['key'])
-                    for sub_plan_idx in range(1, len(plan_list) + 1):
-                        pos = self.env.target.pos
-                        dir = self.env.target.dir
-                        actor_length = self.length_compute(pos,dir,plan_list[:sub_plan_idx]) # 这个任务actor需要多少步完成
-                        
-                        if plan_list[sub_plan_idx - 1]["type"] == "pickup":
-                            obs_length = len(astar_key((obs_pos,obs_dir), plan_list[sub_plan_idx - 1]['pos']['value'],
-                                             self.env,self.hidden_cost, agent_idx = 0, version = True))
-                        else:
-                            obs_length = len(astar_open((obs_pos,obs_dir), plan_list[sub_plan_idx - 1]['pos']['value'],
-                                             self.env,self.hidden_cost, version = True))
-                        
-                        payoff = actor_length - obs_length
-                        excepted_payoff = goal_recognition[goal_room_idx]
-                        subgoal_expected_payoff[(plan_list[sub_plan_idx - 1]["type"],plan_list[sub_plan_idx - 1]['pos']['value'])] = excepted_payoff
-                        
-            elif plan['type'] == 'open':
+        start_rid = _rid_from_xy(self.env,*pos,self.hallway_col)
+        door_list = self.abs["edges"]
+        
+        subgoal_expected_payoff = {}
+        for eid in range(len(door_list)):
+            subgoal_expected_payoff[eid] = 0
+            door = door_list[eid]
+            if door["locked"] == True:
                 for goal_room_idx in range(len(self.goal_rooms)):
                     goal_room = self.goal_rooms[goal_room_idx]
                     mask = _initial_open_mask(self.abs)
-                    mask |= (1 << plan['eid'])
-                    plan_list = [plan] + _plan_onekey_persist_open(self.abs,start_rid, goal_room, held = held,open_mask = mask)
-                    for sub_plan_idx in range(1, len(plan_list) + 1):
-                        pos = self.env.target.pos
-                        dir = self.env.target.dir
-                        actor_length = self.length_compute(pos,dir,plan_list[:sub_plan_idx]) # 这个任务actor需要多少步完成
-                        if plan_list[sub_plan_idx - 1]["type"] == "pickup":
-                            obs_length = len(astar_key((obs_pos,obs_dir), plan_list[sub_plan_idx - 1]['pos']['value'],
-                                             self.env,self.hidden_cost,agent_idx = 0, version = True))
-                        else:
-                            obs_length = len(astar_open((obs_pos,obs_dir), plan_list[sub_plan_idx - 1]['pos']['value'],
-                                             self.env,self.hidden_cost, version = True))
-                        
-                        payoff = actor_length - obs_length
-                        excepted_payoff = goal_recognition[goal_room_idx]
-                        subgoal_expected_payoff[(plan_list[sub_plan_idx - 1]["type"],plan_list[sub_plan_idx - 1]['pos']['value'])] = excepted_payoff
+                    mask |= (1 << eid)
+                    plan_list = _plan_onekey_persist_open(self.abs,start_rid, goal_room, held = held,open_mask = mask)
+                    if plan_list == []:
+                        plan_list_len = self.high_level_length[goal_room][0]
+                    else:
+                        plan_list_len = len(plan_list)
+                    payoff = (self.goal_length[goal_room] - self.length_compute(pos,dir,plan_list))/self.goal_length[goal_room]
+                    payoff += 10*(self.high_level_length[goal_room][0] - len(plan_list))/self.high_level_length[goal_room][0]
+                    excepted_payoff = goal_recognition[goal_room_idx] * payoff
+                    subgoal_expected_payoff[eid] += excepted_payoff
 
-        #print(subgoal_expected_payoff)
-        act, pos = self.select_best_action(subgoal_expected_payoff)
-        print(act,pos)
-        if act == "open":
-            path = astar_open((obs_pos,obs_dir),pos,self.env,self.hidden_cost, version = True)
-        if act == "pickup":
-            path = astar_key((obs_pos,obs_dir),pos,self.env,self.hidden_cost,agent_idx =0, version = True)
-        #print(path)
+        print(subgoal_expected_payoff)
+        max_door = max(subgoal_expected_payoff, key=subgoal_expected_payoff.get)
+
+        
+        door = self.abs["edges"][max_door]
+        print(door["color"],door["pos"])
+        
+        path = []
+        if obs_held:
+            #print(obs_held.color,door["color"])
+            if obs_held.color == door["color"]:
+                path = astar_open((obs_pos,obs_dir),door["pos"],self.env,self.hidden_cost, version = True)
+                return path[1][0]
+
+        all_keys = self.find_all_keys(self.abs["rooms"],door["color"])
+        nearest = min(all_keys, key=lambda k: manhattan_distance(k['pos'], obs_pos) + manhattan_distance(k['pos'],door["pos"]))
+        path = astar_key((obs_pos,obs_dir),nearest['pos'],self.env,self.hidden_cost,agent_idx =0, version = True)
         return path[1][0]
+
+    
+
+    # def compute_action(self, obs):
+    #     held = self.env.target.carrying
+    #     obs_pos = self.env.observer.pos
+    #     obs_dir = self.env.observer.dir
+    #     obs_held = self.env.observer.carrying
+    #     goal_recognition = self.goal_recognition()
+    #     subgoal_expected_payoff = {}
+        
+    #     for plan in self.current_palns:
+    #         #print(plan)
+    #         start_rid = _rid_from_xy(self.env,*plan['pos']['value'],self.hallway_col)
+    #         if plan['type'] == 'pickup':
+    #             for goal_room_idx in range(len(self.goal_rooms)):
+    #                 goal_room = self.goal_rooms[goal_room_idx]
+    #                 plan_list = [plan] + _plan_onekey_persist_open(self.abs, start_rid,goal_room, held = plan['key'])
+    #                 for sub_plan_idx in range(1, len(plan_list) + 1):
+    #                     pos = self.env.target.pos
+    #                     dir = self.env.target.dir
+    #                     actor_length = self.length_compute(pos,dir,plan_list[:sub_plan_idx]) # 这个任务actor需要多少步完成
+                        
+    #                     if plan_list[sub_plan_idx - 1]["type"] == "pickup":
+    #                         obs_length = len(astar_key((obs_pos,obs_dir), plan_list[sub_plan_idx - 1]['pos']['value'],
+    #                                          self.env,self.hidden_cost, agent_idx = 0, version = True))
+    #                     else:
+    #                         obs_length = len(astar_open((obs_pos,obs_dir), plan_list[sub_plan_idx - 1]['pos']['value'],
+    #                                          self.env,self.hidden_cost, version = True))
+                        
+    #                     payoff = actor_length - obs_length
+    #                     excepted_payoff = goal_recognition[goal_room_idx]
+    #                     subgoal_expected_payoff[(plan_list[sub_plan_idx - 1]["type"],plan_list[sub_plan_idx - 1]['pos']['value'])] = excepted_payoff
+                        
+    #         elif plan['type'] == 'open':
+    #             for goal_room_idx in range(len(self.goal_rooms)):
+    #                 goal_room = self.goal_rooms[goal_room_idx]
+    #                 mask = _initial_open_mask(self.abs)
+    #                 mask |= (1 << plan['eid'])
+    #                 plan_list = [plan] + _plan_onekey_persist_open(self.abs,start_rid, goal_room, held = held,open_mask = mask)
+    #                 for sub_plan_idx in range(1, len(plan_list) + 1):
+    #                     pos = self.env.target.pos
+    #                     dir = self.env.target.dir
+    #                     actor_length = self.length_compute(pos,dir,plan_list[:sub_plan_idx]) # 这个任务actor需要多少步完成
+    #                     if plan_list[sub_plan_idx - 1]["type"] == "pickup":
+    #                         obs_length = len(astar_key((obs_pos,obs_dir), plan_list[sub_plan_idx - 1]['pos']['value'],
+    #                                          self.env,self.hidden_cost,agent_idx = 0, version = True))
+    #                     else:
+    #                         obs_length = len(astar_open((obs_pos,obs_dir), plan_list[sub_plan_idx - 1]['pos']['value'],
+    #                                          self.env,self.hidden_cost, version = True))
+                        
+    #                     payoff = actor_length - obs_length
+    #                     excepted_payoff = goal_recognition[goal_room_idx]
+    #                     subgoal_expected_payoff[(plan_list[sub_plan_idx - 1]["type"],plan_list[sub_plan_idx - 1]['pos']['value'])] = excepted_payoff
+
+    #     #print(subgoal_expected_payoff)
+    #     act, pos = self.select_best_action(subgoal_expected_payoff)
+    #     #print(act,pos)
+    #     if act == "open":
+    #         path = astar_open((obs_pos,obs_dir),pos,self.env,self.hidden_cost, version = True)
+    #     if act == "pickup":
+    #         path = astar_key((obs_pos,obs_dir),pos,self.env,self.hidden_cost,agent_idx =0, version = True)
+    #     #print(path)
+    #     return path[1][0]
 
 
     def select_best_action(self,scores):
@@ -169,7 +233,11 @@ class Observer(BaseAgent):
                     self.abs["rooms"][room]["keys"].append({'color':obj.color,'pos':(x,y)})
                    
         for door in self.abs["edges"]:
-            door["locked"] = (self.env.grid.get(*door["pos"]).state == "locked")
+            obj = self.env.grid.get(*door["pos"])
+            if obj:
+                door["locked"] = (self.env.grid.get(*door["pos"]).state == "locked")
+            else:
+                door["locked"] = False
         #compute the high level plan
         for plan in current_task_options_onekey_persist_open(self.abs,_rid_from_xy(self.env,*pos,self.hallway_col),
                                                              held = held, end_rid = self.goal_rooms, goal_pos = self.goals):

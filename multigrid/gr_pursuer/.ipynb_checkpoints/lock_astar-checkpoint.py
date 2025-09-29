@@ -180,6 +180,10 @@ def astar_key(pos_state, target, env, cost=None,
         it += 1
     if found:
         path = get_path(found)  # 你的 get_path 返回 [(action, ...), ...]
+        dx, dy = DIR_TO_VEC[d]
+        new_pos = (pos[0] + dx, pos[1] + dy)
+        if _is_wall(env,new_pos):
+            return path
         return ([path[0]] + prefix + path[1:]) if prefix else path
     # 没找到路：至少把手里的钥匙丢掉
     return [(None,0)] + prefix if prefix else None
