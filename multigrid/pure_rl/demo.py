@@ -3,7 +3,6 @@ import numpy as np
 import random
 from multigrid.envs.goal_prediction import AGREnv
 from multigrid.gr_pursuer.agents.observer import BeliefUpdateObserver
-from multigrid.pure_rl.reward_observer import ObserverRewarder
 from multigrid.pure_rl.obs_to_belief_image_array import preprocess_obs_for_rl_policy
 import os 
 from pathlib import Path
@@ -125,5 +124,5 @@ if __name__ == "__main__":
     # Run the belief tracking demo (recommended)
     ppo_checkpoint_path = '/home/sukai/Project/chenyuan_project/new_multi_grid_rl/multigrid/pure_rl/ppo_observer_checkpoints'
     
-    belief_tracking_demo()
+    belief_tracking_demo(ppo_checkpoint_path)
     
