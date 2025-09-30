@@ -60,23 +60,43 @@ def evaluate_scenario(scenario_data, verbose=False):
         first_correct_step = -1  # Track when goal was first correctly identified
         start_time = time()
         
+        # Track visibility data for analysis
+        visibility_history = []  # List of True/False for in view/not in view
+        goal_belief_history = []  # Track goal belief evolution
+        confidence_history = []   # Track max confidence over time
+        
         for step, target_action in enumerate(target_actions):
-            # Observer stays still during target trajectory replay to match dataset generation
-            # Observer only updates beliefs, doesn't move
-            observer_action = 6  # Action.stay - observer remains stationary
+            # Check visibility before updating beliefs
+            observer_obs = obs[0] if isinstance(obs, dict) and 0 in obs else obs
+            target_visible = "target_pos" in observer_obs or observer.pos == env.target.pos
+            visibility_history.append(target_visible)
             
-            # Update observer beliefs based on current observation
-            observer.compute_action(obs)  # This updates beliefs without using the returned action
+            # Observer actively moves using the action returned by compute_action
+            observer_action = observer.compute_action(obs)  # Get the actual action for observer movement
             
-            # Step environment with target action and observer staying still
+            if verbose and step < 5:  # Show first few steps for debugging
+                obs_pos_before = tuple(env.observer.pos)
+                target_pos = tuple(env.target.pos)
+                print(f"        Step {step}: Observer at {obs_pos_before}, Target at {target_pos}, "
+                      f"Visibility: {'✅' if target_visible else '❌'}, Observer action: {observer_action}")
+            
+            # Step environment with both observer and target actions
             actions = {0: observer_action, 1: target_action}
             obs, reward, terminated, truncated, info = env.step(actions)
+            
+            if verbose and step < 5:  # Show movement result
+                obs_pos_after = tuple(env.observer.pos)
+                print(f"              Observer moved to {obs_pos_after}")
             
             # Check goal prediction
             goal_beliefs = observer.goal_belief
             predicted_goal = max(goal_beliefs.items(), key=lambda x: x[1])
             max_confidence = predicted_goal[1]
             predicted_goal_pos = predicted_goal[0]
+            
+            # Store belief history for analysis
+            goal_belief_history.append(dict(goal_beliefs))  # Copy current beliefs
+            confidence_history.append(max_confidence)
             
             # Check for convergence (stable correct prediction)
             if predicted_goal_pos == goal and max_confidence > 0.5:
@@ -115,14 +135,46 @@ def evaluate_scenario(scenario_data, verbose=False):
                     print(f"      ❌ Never achieved stable correct prediction (final: {final_predicted_goal_pos}, confidence: {final_confidence:.3f})")
         
         execution_time = time() - start_time
+        
+        # Calculate visibility statistics
+        total_steps = len(visibility_history)
+        visible_steps = sum(visibility_history)
+        visibility_ratio = visible_steps / total_steps if total_steps > 0 else 0.0
+        
+        # Count visibility changes (transitions from visible to not visible and vice versa)
+        visibility_changes = 0
+        for i in range(1, len(visibility_history)):
+            if visibility_history[i] != visibility_history[i-1]:
+                visibility_changes += 1
+        
+        # Prepare analysis data
+        analysis_data = {
+            'visibility_history': visibility_history,
+            'visibility_ratio': visibility_ratio,
+            'visibility_changes': visibility_changes,
+            'visible_steps': visible_steps,
+            'total_steps': total_steps,
+            'goal_belief_history': goal_belief_history,
+            'confidence_history': confidence_history
+        }
+        
         env.close()
         
-        return success, convergence_step, execution_time
+        return success, convergence_step, execution_time, analysis_data
         
     except Exception as e:
         if verbose:
             print(f"      ❌ Error: {e}")
-        return False, -1, 0.0
+        empty_analysis = {
+            'visibility_history': [],
+            'visibility_ratio': 0.0,
+            'visibility_changes': 0,
+            'visible_steps': 0,
+            'total_steps': 0,
+            'goal_belief_history': [],
+            'confidence_history': []
+        }
+        return False, -1, 0.0, empty_analysis
 
 def main():
     """Main evaluation function."""
@@ -152,20 +204,27 @@ def main():
     
     print(f"\n🚀 Starting evaluation...")
     
-    for idx, row in df.iterrows():
+    for i, (idx, row) in enumerate(df.iterrows()):
         if args.verbose:
-            print(f"\n🔍 Scenario {idx + 1}/{len(df)}")
+            print(f"\n🔍 Scenario {i + 1}/{len(df)}")
             if 'behavior_style' in row:
                 print(f"   Style: {row['behavior_style']}")
         else:
-            print(f"🔍 {idx + 1}/{len(df)}", end=" ")
+            print(f"🔍 {i + 1}/{len(df)}", end=" ")
         
-        success, convergence_step, exec_time = evaluate_scenario(row, args.verbose)
+        success, convergence_step, exec_time, analysis_data = evaluate_scenario(row, args.verbose)
         
         results.append({
             'success': success,
             'convergence_step': convergence_step,
-            'execution_time': exec_time
+            'execution_time': exec_time,
+            'visibility_ratio': analysis_data['visibility_ratio'],
+            'visibility_changes': analysis_data['visibility_changes'],
+            'visible_steps': analysis_data['visible_steps'],
+            'total_trajectory_steps': analysis_data['total_steps'],
+            'visibility_history': str(analysis_data['visibility_history']),  # Store as string
+            'final_confidence': analysis_data['confidence_history'][-1] if analysis_data['confidence_history'] else 0.0,
+            'max_confidence_reached': max(analysis_data['confidence_history']) if analysis_data['confidence_history'] else 0.0
         })
         
         if success:
@@ -189,6 +248,29 @@ def main():
         print(f"   Avg convergence step: {avg_convergence:.1f}")
     
     print(f"   Total time: {total_time:.1f}s")
+    
+    # Visibility statistics
+    if results:
+        avg_visibility = sum(r['visibility_ratio'] for r in results) / len(results)
+        avg_changes = sum(r['visibility_changes'] for r in results) / len(results)
+        print(f"\n👁️  Visibility Analysis:")
+        print(f"   Avg visibility ratio: {avg_visibility:.1%}")
+        print(f"   Avg visibility changes: {avg_changes:.1f}")
+        
+        # Success vs visibility correlation
+        successful_results = [r for r in results if r['success']]
+        failed_results = [r for r in results if not r['success']]
+        
+        if successful_results and failed_results:
+            success_visibility = sum(r['visibility_ratio'] for r in successful_results) / len(successful_results)
+            failed_visibility = sum(r['visibility_ratio'] for r in failed_results) / len(failed_results)
+            print(f"   Success cases visibility: {success_visibility:.1%}")
+            print(f"   Failed cases visibility: {failed_visibility:.1%}")
+            
+            if success_visibility > failed_visibility:
+                print(f"   ✅ Higher visibility correlates with success")
+            else:
+                print(f"   ⚠️ Lower visibility in successful cases (unexpected)")
     
     # Add results to dataframe and save
     for i, result in enumerate(results):
