@@ -63,16 +63,24 @@ class LockTarget(BaseAgent):
             if ety == "pickup":
                 kpos = tuple(evt["pos"]["value"])
                 path = astar_key((pos, dir), kpos, self.env, self.hidden_cost)
-                return path[1][0]
+                if path:
+                    return path[1][0]
+                else:
+                    return 0
     
             elif ety == "open":
                 dpos = tuple(evt["pos"]["value"])
                 path = astar_open((pos, dir), dpos, self.env, self.hidden_cost)
-                return path[1][0] 
-    
+                if path:
+                    return path[1][0]
+                else:
+                    return 0    
         # --- 如果所有事件都完成，走终点 ---
         path = astar((pos, dir), self.goal, self.env, self.hidden_cost)
-        return path[1][0]
+        if path:
+            return path[1][0]
+        else:
+            return 0
 
 class OldLockTarget(BaseAgent):
 

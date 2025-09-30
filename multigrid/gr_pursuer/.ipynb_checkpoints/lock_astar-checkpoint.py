@@ -184,6 +184,9 @@ def astar_key(pos_state, target, env, cost=None,
         new_pos = (pos[0] + dx, pos[1] + dy)
         if _is_wall(env,new_pos):
             return path
+        obj = env.grid.get(*new_pos)
+        if _is_closed_door(obj):
+            return path
         return ([path[0]] + prefix + path[1:]) if prefix else path
     # 没找到路：至少把手里的钥匙丢掉
     return [(None,0)] + prefix if prefix else None
