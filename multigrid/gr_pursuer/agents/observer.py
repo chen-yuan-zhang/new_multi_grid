@@ -403,7 +403,9 @@ class BeliefUpdateObserver(BaseAgent):
 
     def greedy(self):
         """
-        Greedy action selection using Manhattan distance since observer can pass through walls.
+        Simple greedy action selection:
+        1. If moving forward reduces distance to target, move forward
+        2. Otherwise, turn toward the direction that points to the target
         """
         # Get the most likely actor position across all goals and behaviors
         most_likely_actor_pos = self.get_most_likely_actor_position()
@@ -412,30 +414,64 @@ class BeliefUpdateObserver(BaseAgent):
             # If no actor position can be determined, stay in place
             return Action.stay
         
-        # Current position
+        # Current position and direction
         current_pos = tuple(self.pos)
         current_dir = int(self.dir)
         
-        # Get all possible actions from current position
-        possible_actions = get_obs_successor(self.env, (current_pos, current_dir))
-        if not possible_actions:
+        # Calculate current distance to target
+        current_distance = abs(current_pos[0] - most_likely_actor_pos[0]) + abs(current_pos[1] - most_likely_actor_pos[1])
+        
+        # Check if moving forward reduces distance
+        # Get forward direction vector
+        forward_vec = Direction(current_dir).to_vec()
+        forward_pos = (current_pos[0] + forward_vec[0], current_pos[1] + forward_vec[1])
+        forward_distance = abs(forward_pos[0] - most_likely_actor_pos[0]) + abs(forward_pos[1] - most_likely_actor_pos[1])
+        
+        # If moving forward reduces distance, do it
+        if forward_distance < current_distance:
+            return Action.forward
+        
+        # Otherwise, determine which direction would be most useful
+        # Calculate the direction vector from current position to target
+        target_vec = (most_likely_actor_pos[0] - current_pos[0], most_likely_actor_pos[1] - current_pos[1])
+        
+        # Determine the best direction to face
+        best_direction = None
+        min_angle_diff = float('inf')
+        
+        # Check all 4 directions to find the one most aligned with target vector
+        for direction in range(4):
+            dir_vec = Direction(direction).to_vec()
+            
+            # Calculate dot product to measure alignment (higher is better)
+            dot_product = dir_vec[0] * target_vec[0] + dir_vec[1] * target_vec[1]
+            
+            # Convert to angle difference (lower is better)
+            # We want maximum dot product, so minimum negative dot product
+            angle_diff = -dot_product
+            
+            if angle_diff < min_angle_diff:
+                min_angle_diff = angle_diff
+                best_direction = direction
+        
+        # Determine how to turn to face the best direction
+        if best_direction is None or best_direction == current_dir:
+            # Already facing the right direction or couldn't determine, stay
             return Action.stay
         
-        # Choose action that minimizes Manhattan distance to most likely actor position
-        # Observer can pass through walls, so Manhattan distance is correct
-        best_action = None
-        best_distance = float('inf')
+        # Calculate the shortest turn (left or right) to reach best direction
+        # Direction values: 0=right, 1=down, 2=left, 3=up
+        turn_diff = (best_direction - current_dir) % 4
         
-        for action, next_pos_state in possible_actions:
-            next_pos = next_pos_state[0]
-            # Calculate Manhattan distance (observer ignores walls)
-            manhattan_distance = abs(next_pos[0] - most_likely_actor_pos[0]) + abs(next_pos[1] - most_likely_actor_pos[1])
-            
-            if manhattan_distance < best_distance:
-                best_distance = manhattan_distance
-                best_action = action
-        
-        return best_action if best_action is not None else Action.stay
+        if turn_diff == 1 or turn_diff == -3:
+            # Turn right (clockwise)
+            return Action.right
+        elif turn_diff == 3 or turn_diff == -1:
+            # Turn left (counter-clockwise)  
+            return Action.left
+        else:
+            # 180 degree turn needed, choose left arbitrarily
+            return Action.left
     
     def get_most_likely_actor_position(self):
         """

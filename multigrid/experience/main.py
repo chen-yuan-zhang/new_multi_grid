@@ -82,19 +82,28 @@ def run_scenario(scenario_config: Dict[str, Any], verbose: bool = False) -> Tupl
     max_confidence_history = []
     predicted_goals_history = []
     
+    # Track visibility data for analysis
+    visibility_history = []  # List of True/False for in view/not in view
+    confidence_history = []   # Track max confidence over time
+    
     step = 0
     start_time = time()
     
     try:
-        while not env.unwrapped.is_done() and step < len(target_actions):
-            # Observer computes its action based on current beliefs
+        for step, target_action in enumerate(target_actions):
+            # Check visibility before updating beliefs
+            observer_obs = observation[0] if isinstance(observation, dict) and 0 in observation else observation
+            target_visible = "target_pos" in observer_obs or observer_agent.pos == env.target.pos
+            visibility_history.append(target_visible)
+            
+            if verbose and step == 0:
+                print(f"        Step {step}: Target visible: {'✅' if target_visible else '❌'}")
+            
+            # Observer actively moves using the action returned by compute_action
             observer_action = observer_agent.compute_action(observation)
             
-            # Use pre-computed target action from dataset
-            target_action = target_actions[step]
-            
-            # Step environment
-            actions = [observer_action, target_action]
+            # Step environment with both observer and target actions
+            actions = {0: observer_action, 1: target_action}
             observation, reward, terminated, truncated, info = env.step(actions)
             
             # Analyze current goal beliefs
@@ -107,6 +116,7 @@ def run_scenario(scenario_config: Dict[str, Any], verbose: bool = False) -> Tupl
             goal_belief_history.append(goal_beliefs)
             max_confidence_history.append(max_confidence)
             predicted_goals_history.append(predicted_goal_pos)
+            confidence_history.append(max_confidence)
             
             # Check for convergence (stable correct prediction)
             if predicted_goal_pos == goal and max_confidence > 0.5:
@@ -151,15 +161,32 @@ def run_scenario(scenario_config: Dict[str, Any], verbose: bool = False) -> Tupl
             else:
                 print(f"      ❌ Never achieved stable correct prediction")
     
-    # Prepare detailed results
+    # Calculate visibility statistics
+    total_steps = len(visibility_history)
+    visible_steps = sum(visibility_history)
+    visibility_ratio = visible_steps / total_steps if total_steps > 0 else 0.0
+    
+    # Count visibility changes (transitions from visible to not visible and vice versa)
+    visibility_changes = 0
+    for i in range(1, len(visibility_history)):
+        if visibility_history[i] != visibility_history[i-1]:
+            visibility_changes += 1
+    
+    # Prepare detailed results with visibility analysis
     results = {
         'success': success,
         'convergence_step': convergence_step,
-        'total_steps': step,
+        'total_steps': step + 1,
         'execution_time': execution_time,
         'final_confidence': final_confidence,
         'final_predicted_goal': final_predicted_goal,
-        'cache_stats': observer_agent.get_cache_stats()
+        'cache_stats': observer_agent.get_cache_stats(),
+        'visibility_ratio': visibility_ratio,
+        'visibility_changes': visibility_changes,
+        'visible_steps': visible_steps,
+        'total_trajectory_steps': total_steps,
+        'visibility_history': str(visibility_history),  # Store as string
+        'max_confidence_reached': max(confidence_history) if confidence_history else 0.0
     }
     
     if verbose and success:
@@ -208,15 +235,16 @@ def main(dataset_path: Optional[str] = None, verbose: bool = False) -> None:
     print(f"\n🚀 Starting evaluation...")
     start_time = time()
     
-    for idx, scenario_row in scenarios_df.iterrows():
+    for i, (idx, scenario_row) in enumerate(scenarios_df.iterrows()):
+        scenario_num = i + 1
         if verbose:
-            print(f"\n🔍 Scenario {idx + 1}/{len(scenarios_df)}")
+            print(f"\n🔍 Scenario {scenario_num}/{len(scenarios_df)}")
             if 'hidden_cost_style' in scenario_row:
                 print(f"   Style: {scenario_row['hidden_cost_style']}")
             if 'size' in scenario_row:
                 print(f"   Size: {scenario_row['size']}x{scenario_row['size']}")
         else:
-            print(f"🔍 Scenario {idx + 1}/{len(scenarios_df)}", end=" ")
+            print(f"🔍 Scenario {scenario_num}/{len(scenarios_df)}", end=" ")
         
         try:
             # Parse scenario configuration
@@ -235,11 +263,17 @@ def main(dataset_path: Optional[str] = None, verbose: bool = False) -> None:
             # Run scenario
             success, convergence_step, results = run_scenario(scenario_config, verbose)
             
-            # Update statistics
-            scenarios_df.loc[idx, 'success'] = success
-            scenarios_df.loc[idx, 'convergence_step'] = convergence_step
-            scenarios_df.loc[idx, 'execution_time'] = results.get('execution_time', 0)
-            scenarios_df.loc[idx, 'final_confidence'] = results.get('final_confidence', 0)
+            # Update statistics with comprehensive analysis (using eval_ prefix like main_simple.py)
+            scenarios_df.loc[idx, 'eval_success'] = success
+            scenarios_df.loc[idx, 'eval_convergence_step'] = convergence_step
+            scenarios_df.loc[idx, 'eval_execution_time'] = results.get('execution_time', 0)
+            scenarios_df.loc[idx, 'visibility_ratio'] = results.get('visibility_ratio', 0.0)
+            scenarios_df.loc[idx, 'visibility_changes'] = results.get('visibility_changes', 0)
+            scenarios_df.loc[idx, 'visible_steps'] = results.get('visible_steps', 0)
+            scenarios_df.loc[idx, 'total_trajectory_steps'] = results.get('total_trajectory_steps', 0)
+            scenarios_df.loc[idx, 'visibility_history'] = results.get('visibility_history', '[]')
+            scenarios_df.loc[idx, 'final_confidence'] = results.get('final_confidence', 0.0)
+            scenarios_df.loc[idx, 'max_confidence_reached'] = results.get('max_confidence_reached', 0.0)
             
             if success:
                 success_count += 1
@@ -253,46 +287,78 @@ def main(dataset_path: Optional[str] = None, verbose: bool = False) -> None:
                 print(f"{status}")
             
         except Exception as e:
-            print(f"❌ Error processing scenario {idx}: {e}")
-            scenarios_df.loc[idx, 'success'] = False
-            scenarios_df.loc[idx, 'convergence_step'] = -1
+            print(f"❌ Error processing scenario {scenario_num}: {e}")
+            scenarios_df.loc[idx, 'eval_success'] = False
+            scenarios_df.loc[idx, 'eval_convergence_step'] = -1
             continue
         
-        # Save intermediate results every 10 scenarios
-        if (idx + 1) % 10 == 0:
-            temp_filename = f"evaluation_results_temp_{idx + 1}.csv"
-            scenarios_df.to_csv(temp_filename, index=False)
+        # Save partial results every 50 scenarios or at key milestones
+        if scenario_num % 50 == 0 or scenario_num in [100, 200, 300, 400, 500, 600]:
+            temp_filename = f"evaluation_results_temp_{scenario_num}_{dataset_path.replace('.csv', '').replace('/', '_')}.csv"
+            scenarios_df.iloc[:scenario_num].to_csv(temp_filename, index=False)
+            
+            # Show current statistics
+            current_success = scenarios_df.iloc[:scenario_num]['eval_success'].sum()
+            current_rate = current_success / scenario_num * 100
             if verbose:
-                print(f"💾 Saved intermediate results: {temp_filename}")
+                print(f"💾 Saved partial results ({scenario_num} scenarios): {temp_filename}")
+                print(f"    Current success rate: {current_rate:.1f}% ({current_success}/{scenario_num})")
+            else:
+                print(f" [Partial: {current_rate:.1f}%]")
     
     total_time = time() - start_time
     
     # Calculate and display final statistics
-    print(f"\n📊 Evaluation Complete!")
+    print(f"\n📊 Evaluation Results:")
     print(f"   Total scenarios: {len(scenarios_df)}")
-    print(f"   Successful predictions: {success_count}")
+    print(f"   Successful: {success_count}")
     print(f"   Success rate: {success_count/len(scenarios_df)*100:.1f}%")
     
     if success_count > 0:
         avg_convergence = convergence_step_sum / success_count
-        print(f"   Average convergence step: {avg_convergence:.1f}")
+        print(f"   Avg convergence step: {avg_convergence:.1f}")
     
-    print(f"   Total execution time: {total_time:.1f}s")
-    print(f"   Average time per scenario: {total_time/len(scenarios_df):.3f}s")
+    print(f"   Total time: {total_time:.1f}s")
     
-    # Save final results
-    output_filename = f"evaluation_results_{int(time())}.csv"
-    scenarios_df.to_csv(output_filename, index=False)
-    print(f"\n💾 Final results saved: {output_filename}")
+    # Visibility statistics
+    completed_scenarios = scenarios_df.dropna(subset=['visibility_ratio'])
+    if len(completed_scenarios) > 0:
+        avg_visibility = completed_scenarios['visibility_ratio'].mean()
+        avg_changes = completed_scenarios['visibility_changes'].mean()
+        print(f"\n👁️  Visibility Analysis:")
+        print(f"   Avg visibility ratio: {avg_visibility:.1%}")
+        print(f"   Avg visibility changes: {avg_changes:.1f}")
+        
+        # Success vs visibility correlation
+        successful_results = completed_scenarios[completed_scenarios['eval_success'] == True]
+        failed_results = completed_scenarios[completed_scenarios['eval_success'] == False]
+        
+        if len(successful_results) > 0 and len(failed_results) > 0:
+            success_visibility = successful_results['visibility_ratio'].mean()
+            failed_visibility = failed_results['visibility_ratio'].mean()
+            print(f"   Success cases visibility: {success_visibility:.1%}")
+            print(f"   Failed cases visibility: {failed_visibility:.1%}")
+            
+            if success_visibility > failed_visibility:
+                print(f"   ✅ Higher visibility correlates with success")
+            else:
+                print(f"   ⚠️ Lower visibility in successful cases (unexpected)")
+    
+
     
     # Summary by behavior style (if available)
     if 'hidden_cost_style' in scenarios_df.columns:
         print(f"\n📈 Results by Behavior Style:")
         style_summary = scenarios_df.groupby('hidden_cost_style').agg({
-            'success': ['count', 'sum', 'mean'],
-            'convergence_step': 'mean'
+            'eval_success': ['count', 'sum', 'mean'],
+            'eval_convergence_step': 'mean'
         }).round(2)
         print(style_summary)
+    
+    # Add results to dataframe for final save
+    final_output_file = f"evaluation_results_{int(time())}.csv"
+    scenarios_df.to_csv(final_output_file, index=False)
+    print(f"\n💾 Results saved: {final_output_file}")
       
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
