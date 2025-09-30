@@ -22,7 +22,7 @@ BETA = 1
 BEHAVIOR_TYPES = [0, 1, 2, 3]
 
 class BeliefUpdateObserver(BaseAgent):
-    def __init__(self, env, init_actor_belief = None, init_goal_belief = None, use_neural_predictor = True, use_log_space = True):
+    def __init__(self, env, init_actor_belief = None, init_goal_belief = None, use_neural_predictor = False, use_log_space = True):
         # For Sukai: set use_neural_predictor = True to use neural predictor
         
         super().__init__(env.observer)

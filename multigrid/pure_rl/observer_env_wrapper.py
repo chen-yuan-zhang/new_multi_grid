@@ -11,7 +11,7 @@ from multigrid.envs.goal_prediction import AGREnv
 from multigrid.gr_pursuer.agents.observer import BeliefUpdateObserver
 from multigrid.pure_rl.obs_to_belief_image_array import obs_to_belief_image_array
 
-class ObserverEnv(gym.Env):
+class ObserverEnvDirectRew(gym.Env):
     """
     Single-agent wrapper around AGREnv:
       - RLlib controls ONLY the observer.
@@ -119,6 +119,7 @@ class ObserverEnv(gym.Env):
 
         _ = self.belief_observer.compute_action(obs[0], render_and_save=False, get_action=False)  # init belief
         
+        
         augmented_obs = self.belief_observer.augment_observation(obs)
         
         belief_img, log_belief_sum = obs_to_belief_image_array(self.belief_observer, None, obs[0])
@@ -167,14 +168,20 @@ class ObserverEnv(gym.Env):
 
         # Custom reward for observer
         # r_t will be the neg entropy of log_belief_sum and neg entropy of goal_belief, that means, more concentrated belief, more reward
-        r_t = -np.sum(log_belief_sum * np.exp(log_belief_sum)) - np.sum([p * np.log(p + 1e-10) for p in goal_belief.values()])
-        r_t = float(r_t)
-        r_t *= (self.gamma ** self._step_idx)  # telescoping discount
-        # normallize r_t
-        r_t = (r_t + 100.0) / 100.0
-        
-        # clip r_t to be between -1 and 1
-        r_t = max(-1.0, min(1.0, r_t))
+        # rl just reward when in view, otherwise 0 reward
+        if "target_pos" in next_obs[0] or self.belief_observer.pos == self.env.target.pos:
+            r_t = 1.0
+            # auxiliary reward if argmax of goal_belief is correct
+            goal_max = None 
+            goal_belief_val = -1.0
+            for g, v in goal_belief.items():
+                if v > goal_belief_val:
+                    goal_belief_val = v
+                    goal_max = g
+            if goal_max == self.env.goal:
+                r_t += 1.0
+        else:
+            r_t = 0.0
 
         termination = truncation = self.env.unwrapped.is_done()
         self._terminated = termination
@@ -183,15 +190,13 @@ class ObserverEnv(gym.Env):
         return belief_img, float(r_t), termination, truncation, infos
 
 
-# test 
-
 if __name__ == "__main__":
     config = {
         "dataset": "results.csv",
         "gamma": 0.995,
     }
     
-    env = ObserverEnv(config)
+    env = ObserverEnvDirectRew(config)
     obs, info = env.reset()
     breakpoint()
     max_steps = 1000

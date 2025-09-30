@@ -4,13 +4,13 @@ from ray.rllib.algorithms.ppo import PPOConfig
 from ray.tune.registry import register_env
 from ray.rllib.models import ModelCatalog
 import os
-from observer_env_wrapper import ObserverEnv
+from observer_env_wrapper import ObserverEnvDirectRew
 from observer_model import ObserverVisionTorchRLModule
 from ray.rllib.core.rl_module.rl_module import RLModuleSpec
 from ray.rllib.core.rl_module.default_model_config import DefaultModelConfig
 
 def make_env(env_config):
-    return ObserverEnv(env_config)
+    return ObserverEnvDirectRew(env_config)
 
 if __name__ == "__main__":
     ray.init(ignore_reinit_error=True)
@@ -62,7 +62,7 @@ if __name__ == "__main__":
             gamma=gamma,
             lr=2.5e-4,
             num_epochs=10,               # passes over the train batch
-            train_batch_size_per_learner=2000,  # samples aggregated per update
+            train_batch_size_per_learner=750,  # samples aggregated per update
             minibatch_size=32,
             lambda_=0.95,
             kl_coeff=0.5,
@@ -92,7 +92,7 @@ if __name__ == "__main__":
 
     algo = config.build_algo()
 
-    for i in range(1000):
+    for i in range(400):
         result = algo.train()
 
         # New-stack metrics live under result["env_runners"]
@@ -102,7 +102,7 @@ if __name__ == "__main__":
         print(f"Iter {i}  episode_return_mean={ep_ret:.2f}")       # :contentReference[oaicite:5]{index=5}
 
         if i % 50 == 0:
-            save_dir = "/home/sukai/Project/chenyuan_project/new_multi_grid_rl/multigrid/pure_rl/ppo_observer_checkpoints"
+            save_dir = "/home/sukai/Project/chenyuan_project/new_multi_grid_new_rl/multigrid/pure_rl/model_data/ppo_observer_checkpoints"
             os.makedirs(save_dir, exist_ok=True)
             ckpt = algo.save(save_dir)
             print("Checkpoint saved to:", ckpt)

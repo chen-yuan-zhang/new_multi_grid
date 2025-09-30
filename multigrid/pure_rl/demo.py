@@ -3,11 +3,12 @@ import numpy as np
 import random
 from multigrid.envs.goal_prediction import AGREnv
 from multigrid.gr_pursuer.agents.observer import BeliefUpdateObserver
-from multigrid.pure_rl.obs_to_belief_image_array import preprocess_obs_for_rl_policy
 import os 
 from pathlib import Path
 from PIL import Image
 import cv2
+
+from multigrid.pure_rl.obs_to_belief_image_array import preprocess_obs_for_rl_policy
 from ray.rllib.core import DEFAULT_MODULE_ID
 from ray.rllib.core.rl_module.rl_module import RLModule
 from ray.rllib.core.columns import Columns
@@ -50,6 +51,7 @@ def belief_tracking_demo(ppo_checkpoint_path):
     
     
     
+    
     # Run simulation
     # Target makes some action (in practice this would be unknown to observer)
     target_actions = [2, 2, 1, 2, 0, 2, 2, 1, 2, 2]  # Example sequence
@@ -67,6 +69,17 @@ def belief_tracking_demo(ppo_checkpoint_path):
             belief_update_observer=belief_observer,
             obs=obs[0],
         )
+        
+        # obs_processed undergones: belief_img = (belief_img.astype(np.float32) / 128.0) - 1.0
+        # revert it back to [0,255] range for visualization
+        vis_img = ((obs_processed + 1.0) * 128.0).astype(np.uint8)
+        vis_img = np.clip(vis_img, 0, 255)
+        # save vis_img
+        save_dir = os.path.join(os.path.dirname(__file__),'demo_observer_obs_new')
+        os.makedirs(save_dir, exist_ok=True)
+        img_pil = Image.fromarray(vis_img)
+        img_pil.save(os.path.join(save_dir, f'step_{step+1}_belief_new.png'))
+        
         input_dict = {
             Columns.OBS: torch.from_numpy(obs_processed).unsqueeze(0),
         }
@@ -75,6 +88,7 @@ def belief_tracking_demo(ppo_checkpoint_path):
         rl_module_out = rl_module.forward_inference(input_dict)
         logits = convert_to_numpy(rl_module_out[Columns.ACTION_DIST_INPUTS])
         observer_action = np.random.choice(env.action_space[0].n, p=softmax(logits[0]))
+        observer_action = int(np.argmax(logits[0]))
         
         # Combine actions (as dict: {agent_id: action})
         actions = {0: observer_action, 1: target_action}
@@ -83,6 +97,10 @@ def belief_tracking_demo(ppo_checkpoint_path):
         next_obs, rewards, terminations, truncations, infos = env.step(actions)
         # draw the observer obs using minigrid rendering
         # when rendering, enable the mask to show the agent's field of view only
+        
+        print(f"Observer action: {observer_action}, Target action: {target_action}")
+
+        print(f"Observer Position: {belief_observer.pos}, Target Position: {env.target.pos}, Observer in Env position: {env.observer.pos}")
 
         
         # IMPORTANT: Augment observations with belief distributions
@@ -90,7 +108,6 @@ def belief_tracking_demo(ppo_checkpoint_path):
         # Display current beliefs
         goal_belief = augmented_obs[0]['goal_belief']
         
-        print(f"Observer action: {observer_action}, Target action: {target_action}")
         print(f"Goal beliefs: {dict((str(k), f'{v:.3f}') for k, v in goal_belief.items())}")
         
        
@@ -122,7 +139,7 @@ def belief_tracking_demo(ppo_checkpoint_path):
 
 if __name__ == "__main__":
     # Run the belief tracking demo (recommended)
-    ppo_checkpoint_path = '/home/sukai/Project/chenyuan_project/new_multi_grid_rl/multigrid/pure_rl/ppo_observer_checkpoints'
+    ppo_checkpoint_path = '/home/sukai/Project/chenyuan_project/new_multi_grid_rl/multigrid/pure_rl/ppo_observer_checkpoints_old'
     
     belief_tracking_demo(ppo_checkpoint_path)
     
