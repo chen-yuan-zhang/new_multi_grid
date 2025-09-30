@@ -186,6 +186,9 @@ class AGREnv(MultiGridEnv):
             assert base_grid.shape[0] == base_grid.shape[1], "base_grid must be square"
             size = base_grid.shape[0]
         
+        # Ensure size is not None
+        if size is None:
+            size = 8  # default size
 
         self.grid_size = size
 
@@ -203,6 +206,7 @@ class AGREnv(MultiGridEnv):
                 self.hidden_cost = hidden_cost
         else:
             self.hidden_cost = np.ones((size, size))
+
         if goals is None:
             self.goals = []
         else:
@@ -415,64 +419,6 @@ class AGREnv(MultiGridEnv):
         
         obs[0] = obs_observations
         return obs
-
-    def augment_obs_with_beliefs(self, obs, goal_belief, actor_belief):
-        """
-        Augment observations with belief distributions from BeliefUpdateObserver.
-        
-        Parameters:
-        obs: Current observations
-        goal_belief: Goal belief distribution dict {goal: probability}
-        actor_belief: Actor belief distribution dict {goal: [grid_bt0, grid_bt1, grid_bt2, grid_bt3]}
-        
-        Returns:
-        Augmented observations
-        """
-        # Handle different observation formats (dict with agent indices, list/tuple, or single obs)
-        if isinstance(obs, dict) and 0 in obs:
-            obs_observations = obs[0]  # Observer is agent 0
-        elif isinstance(obs, (list, tuple)):
-            obs_observations = obs[0]  # Observer is first agent
-        else:
-            obs_observations = obs  # Single observation
-        
-        # Add goal belief distribution
-        obs_observations["goal_belief"] = dict(goal_belief)
-        
-        # Add raw actor belief distribution (multi-behavior structure)
-        raw_actor_belief = {}
-        for goal, belief_list in actor_belief.items():
-            # Keep the original list structure with all behavior types
-            raw_actor_belief[goal] = [grid.copy() for grid in belief_list]
-        obs_observations["actor_belief"] = raw_actor_belief
-        
-        # Add behavior pattern distribution (belief per behavior type)
-        behavior_pattern_dist = {}
-        # Get number of behavior types from first goal's belief list
-        if actor_belief:
-            first_goal = next(iter(actor_belief))
-            num_behaviors = len(actor_belief[first_goal])
-            
-            for behavior_idx in range(num_behaviors):
-                behavior_pattern_dist[f"behavior_{behavior_idx}"] = {}
-                for goal, belief_list in actor_belief.items():
-                    behavior_pattern_dist[f"behavior_{behavior_idx}"][goal] = belief_list[behavior_idx].copy()
-                    
-        obs_observations["behavior_patterns"] = behavior_pattern_dist
-        
-        if isinstance(obs, dict) and 0 in obs:
-            obs[0] = obs_observations
-            return obs
-        elif isinstance(obs, list):
-            obs[0] = obs_observations
-            return obs
-        elif isinstance(obs, tuple):
-            # Convert tuple to list for modification
-            obs_list = list(obs)
-            obs_list[0] = obs_observations
-            return obs_list
-        else:
-            return obs_observations
 
     
     def step(self, actions):
