@@ -28,7 +28,8 @@ def obs_to_belief_image_array(belief_update_observer, filename, obs, add_noise=T
     # Sum across all goals and behavior types
     for goal, belief_list in belief_update_observer.actor_belief.items():
         for behavior_grid in belief_list:
-            total_belief += behavior_grid
+            regular_space_grid = np.exp(np.clip(behavior_grid, -700, 700))
+            total_belief += regular_space_grid
 
     belief_sum = np.sum(total_belief, axis=2)
     log_belief_sum = np.log(belief_sum + 1e-10) # shape (H,W)
