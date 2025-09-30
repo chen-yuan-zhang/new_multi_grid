@@ -12,6 +12,61 @@ import torch
 import matplotlib.pyplot as plt
 from loguru import logger
 import cv2 
+from multigrid.core.grid import Grid
+from multigrid.core.agent import Agent
+
+from collections import OrderedDict, defaultdict
+
+class FIFOCache:
+    def __init__(self, capacity: int):
+        """
+        Initialize a FIFO cache with a specified capacity.
+        
+        Args:
+            capacity: Maximum number of items the cache can hold
+        """
+        self.capacity = capacity
+        self.cache = OrderedDict()  # Preserves insertion order
+    
+    def get(self, key):
+        """
+        Retrieve an item from the cache by key.
+        
+        Args:
+            key: The key of the item to retrieve
+            
+        Returns:
+            The value associated with the key, or None if not found
+        """
+        if key not in self.cache:
+            return None
+        return self.cache[key]
+    
+    def put(self, key, value):
+        """
+        Add or update an item in the cache.
+        
+        If the cache is full, the oldest item (first inserted) will be evicted.
+        
+        Args:
+            key: The key of the item to add/update
+            value: The value to associate with the key
+        """
+        # If key exists, remove it first to update its position (optional behavior)
+        if key in self.cache:
+            del self.cache[key]
+        # If cache is full, remove the oldest item
+        elif len(self.cache) >= self.capacity:
+            self.cache.popitem(last=False)  # last=False removes the first inserted item
+        
+        # Add the new item
+        self.cache[key] = value
+    
+    def __str__(self):
+        """String representation of the cache"""
+        return str(dict(self.cache))
+
+IMAGE_FIFO_CACHE = FIFOCache(capacity=10000)
 
 DEBUG_MODE = False
 
@@ -169,6 +224,45 @@ def get_location_icon(location, map_size: int, image_array: np.ndarray, env):
 CALLING_COUNTER = 0
 TIME_CHECKPOINT = time.time()
 
+
+def local_render(env, width, height, pos_state, tile_size):
+    highlight_mask = np.zeros(shape=(width, height), dtype=bool)
+    agent_pos, agent_dir = pos_state
+    # Get agent locations
+    # For overlapping agents, non-terminated agents get priority
+    location_to_agent = defaultdict(type(None))
+    # create a dummy agent for rendering purpose
+    dummy_agent = Agent(1)
+    dummy_agent.color = 'green' # green is the actor agent color
+    dummy_agent.dir = agent_dir
+    location_to_agent[tuple(agent_pos)] = dummy_agent # 1 means the actor agent 
+
+    # Initialize pixel array
+    width_px = width * tile_size
+    height_px = height * tile_size
+    img = np.zeros(shape=(height_px, width_px, 3), dtype=np.uint8)
+
+    # Render the grid
+    for j in range(0, height):
+        for i in range(0, width):
+            assert highlight_mask is not None
+            cell = env.grid.get(i, j)
+            tile_img = Grid.render_tile(
+                cell,
+                agent=location_to_agent[i, j],
+                highlight=highlight_mask[i, j],
+                tile_size=tile_size,
+            )
+
+            ymin = j * tile_size
+            ymax = (j + 1) * tile_size
+            xmin = i * tile_size
+            xmax = (i + 1) * tile_size
+            img[ymin:ymax, xmin:xmax, :] = tile_img
+
+    return img
+
+
 def neuro_predict(env, goal, behavior_type, successors, pos_state):
     """Predict action probabilities using the neuro predictor model.
     Args:
@@ -183,7 +277,7 @@ def neuro_predict(env, goal, behavior_type, successors, pos_state):
     
     global CALLING_COUNTER, TIME_CHECKPOINT
     CALLING_COUNTER += 1
-    
+    agent_pos, agent_dir = pos_state
     if CALLING_COUNTER % 50 == 0:
         current_time = time.time()
         elapsed = current_time - TIME_CHECKPOINT
@@ -198,9 +292,37 @@ def neuro_predict(env, goal, behavior_type, successors, pos_state):
         ACTOR_PREDICTOR_MODEL, ACTOR_PREDICTOR_TOKENIZER = load_actor_predictor_model()
         
     map_size = env.grid_size
-    the_image = env.grid.render(tile_size=32, agents=env.unwrapped.agents[1:], highlight_mask=None)
-    goal_desc = get_location_icon(goal, map_size, the_image, env)
     
+    
+    # the_image_key = (id(env), agent_pos, agent_dir)
+    id_env = tuple(env.base_grid.flatten().tolist())
+    the_image_key = (id_env, agent_pos, agent_dir)
+    if the_image_key in IMAGE_FIFO_CACHE.cache:
+        the_image = IMAGE_FIFO_CACHE.get(the_image_key)
+    else:
+        
+        width, height = env.width, env.height
+        tile_size = 32  # Increased tile size for better resolution
+        the_image = local_render(env, width, height, pos_state, tile_size)
+        IMAGE_FIFO_CACHE.put(the_image_key, the_image)
+        
+    # # debug image save 
+    # save_dir =  '/home/sukai/Project/chenyuan_project/new_multi_grid/debug_images'
+    # Path(save_dir).mkdir(parents=True, exist_ok=True)
+    # debug_image_path = os.path.join(save_dir, f"debug_image_calling_count_{CALLING_COUNTER}_pos_{agent_pos[0]}_{agent_pos[1]}_dir_{agent_dir}.png")
+    # the_image_pil = Image.fromarray(the_image)
+    # the_image_pil.save(debug_image_path)
+    
+    # # --- end of debug ---
+    
+    # goal_desc_key = (id(env), goal)
+    goal_desc_key = (id_env, goal, map_size)
+    if goal_desc_key in IMAGE_FIFO_CACHE.cache:
+        goal_desc = IMAGE_FIFO_CACHE.get(goal_desc_key)
+    else:
+        goal_desc = get_location_icon(goal, map_size, the_image, env)
+        IMAGE_FIFO_CACHE.put(goal_desc_key, goal_desc)
+        
     noise = np.random.normal(0, 10, the_image.shape).astype(np.uint8)
     image_aug = cv2.addWeighted(the_image, 0.9, noise, 0.1, 0)
     
@@ -244,7 +366,6 @@ def neuro_predict(env, goal, behavior_type, successors, pos_state):
 
         
         # * convert from up right down left to forward left right using the information of successors
-        agent_pos, agent_dir = pos_state
         agent_dir = int(agent_dir)
         # convert agent_dir to text 
         agent_dir_text = ACTION_LABELS[agent_dir]

@@ -12,6 +12,7 @@ from multigrid.utils.obs import gen_obs_grid_encoding
 from multigrid.core.constants import Type
 import os
 from collections import deque
+from time import sleep
 
 # from .neuro_predictor import neuro_predict
 
@@ -21,14 +22,16 @@ BETA = 1
 BEHAVIOR_TYPES = [0, 1, 2, 3]
 
 class BeliefUpdateObserver(BaseAgent):
-    def __init__(self, env, init_actor_belief = None, init_goal_belief = None, use_neural_predictor = False, use_log_space = True):
+    def __init__(self, env, init_actor_belief = None, init_goal_belief = None, use_neural_predictor = True, use_log_space = True):
         # For Sukai: set use_neural_predictor = True to use neural predictor
         
         super().__init__(env.observer)
 
+
         if use_neural_predictor:
             from .neuro_predictor import neuro_predict
             self.neuro_predict = neuro_predict
+            print("Using neural predictor for transition probabilities.")
 
         self.env = env
         self.agent.name = "BeliefUpdateObserver"
@@ -357,7 +360,7 @@ class BeliefUpdateObserver(BaseAgent):
         }
 
         
-    def compute_action(self, obs, render_and_save=True, get_action=True):
+    def compute_action(self, obs, render_and_save=False, get_action=True):
         self.step += 1
         
         # Access observer's observation (agent 0) from the multi-agent observation dict
@@ -377,7 +380,8 @@ class BeliefUpdateObserver(BaseAgent):
         # Normalize actor beliefs to ensure probability sums to 1
         self.normalize_actor_beliefs_to_one()
         
-        # self.render_and_save(f'belief_update_test/actor_belief_step_{self.step}.png', obs)
+        if render_and_save:
+            self.render_and_save(f'belief_update_test/actor_belief_step_{self.step}.png', obs)
 
         # Use greedy action selection instead of MCTS
         if get_action:

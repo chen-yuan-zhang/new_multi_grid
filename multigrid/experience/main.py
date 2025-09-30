@@ -88,7 +88,7 @@ def run_scenario(scenario_config: Dict[str, Any], verbose: bool = False) -> Tupl
     try:
         while not env.unwrapped.is_done() and step < len(target_actions):
             # Observer computes its action based on current beliefs
-            observer_action = observer_agent.compute_action(observation)
+            observer_action = observer_agent.compute_action(observation[0])
             
             # Use pre-computed target action from dataset
             target_action = target_actions[step]
