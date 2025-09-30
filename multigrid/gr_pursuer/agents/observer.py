@@ -492,15 +492,32 @@ class BeliefUpdateObserver(BaseAgent):
         # Get a sample grid shape from the first behavior type of the first goal
         sample_goal = next(iter(self.actor_belief))
         sample_grid = self.actor_belief[sample_goal][0]
-        total_belief = np.zeros_like(sample_grid)
         
-        # Sum across all goals and all behavior types
-        for goal, belief_list in self.actor_belief.items():
-            for behavior_grid in belief_list:
-                total_belief += behavior_grid
-
-        belief_sum = np.sum(total_belief, axis=2)
-        log_belief_sum = np.log(belief_sum + 1e-10)
+        if self.use_log_space:
+            # Handle log space: convert to regular space first, then sum
+            total_belief = np.zeros_like(sample_grid)
+            for goal, belief_list in self.actor_belief.items():
+                for behavior_grid in belief_list:
+                    # Convert from log space to regular space (clipped to avoid overflow)
+                    regular_space_grid = np.exp(np.clip(behavior_grid, -700, 700))
+                    total_belief += regular_space_grid
+            
+            # Sum across directions for position beliefs
+            belief_sum = np.sum(total_belief, axis=2)
+            # Take log for visualization (already in regular space)
+            log_belief_sum = np.log(belief_sum + 1e-10)
+        else:
+            # Regular space: sum directly
+            total_belief = np.zeros_like(sample_grid)
+            for goal, belief_list in self.actor_belief.items():
+                for behavior_grid in belief_list:
+                    total_belief += behavior_grid
+            
+            # Sum across directions for position beliefs
+            belief_sum = np.sum(total_belief, axis=2)
+            # Take log for visualization
+            log_belief_sum = np.log(belief_sum + 1e-10)
+        
         vmin = np.min(log_belief_sum)
         vmax = np.max(log_belief_sum)
         
