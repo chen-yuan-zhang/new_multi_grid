@@ -28,6 +28,7 @@ class BeliefUpdateObserver(BaseAgent):
 
         if use_neural_predictor:
             from .neuro_predictor import neuro_predict
+            self.neuro_predict = neuro_predict
 
         self.env = env
         self.agent.name = "BeliefUpdateObserver"
@@ -244,7 +245,7 @@ class BeliefUpdateObserver(BaseAgent):
                 next_pos, next_dir = succ
                 formatted_successors.append((action, ((next_pos[0], next_pos[1]), next_dir)))
             # Uncomment the following line when neural predictor is available
-            # tran_probs = neuro_predict(self.env, goal, behavior_idx, formatted_successors, pos_state)
+            tran_probs = self.neuro_predict(self.env, goal, behavior_idx, formatted_successors, pos_state)
             
         
         if not use_neural:
