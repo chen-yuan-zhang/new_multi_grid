@@ -9,6 +9,8 @@ from observer_model import ObserverVisionTorchRLModule
 from ray.rllib.core.rl_module.rl_module import RLModuleSpec
 from ray.rllib.core.rl_module.default_model_config import DefaultModelConfig
 
+TRAIN_DATA_PATH = "formal_dataset_v0.csv"  # Path to your training dataset CSV
+
 def make_env(env_config):
     return ObserverEnvDirectRew(env_config)
 
@@ -21,7 +23,7 @@ if __name__ == "__main__":
     gamma = 0.995
 
     # Goes into your ObserverEnv
-    env_cfg = {"gamma": gamma, "dataset": "results.csv"}
+    env_cfg = {"gamma": gamma, "dataset": TRAIN_DATA_PATH}
 
     # Simple GPU selector: use 1 GPU if any are visible
     visible = os.environ.get("CUDA_VISIBLE_DEVICES")
@@ -92,7 +94,7 @@ if __name__ == "__main__":
 
     algo = config.build_algo()
 
-    for i in range(400):
+    for i in range(600):
         result = algo.train()
 
         # New-stack metrics live under result["env_runners"]
@@ -102,7 +104,7 @@ if __name__ == "__main__":
         print(f"Iter {i}  episode_return_mean={ep_ret:.2f}")       # :contentReference[oaicite:5]{index=5}
 
         if i % 50 == 0:
-            save_dir = "/home/sukai/Project/chenyuan_project/new_multi_grid_new_rl/multigrid/pure_rl/model_data/ppo_observer_checkpoints"
+            save_dir = os.path.join(os.environ['WORKING_DIR'], f"data/model_data/{TRAIN_DATA_PATH}/ppo_observer_checkpoints")
             os.makedirs(save_dir, exist_ok=True)
             ckpt = algo.save(save_dir)
             print("Checkpoint saved to:", ckpt)
