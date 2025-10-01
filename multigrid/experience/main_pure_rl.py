@@ -347,7 +347,7 @@ def main(dataset_path: Optional[str] = None, verbose: bool = False) -> None:
         
         # Save partial results every 50 scenarios or at key milestones
         if scenario_num % 50 == 0 or scenario_num in [100, 200, 300, 400, 500, 600]:
-            temp_filename = f"evaluation_results_temp_{scenario_num}_{dataset_path.replace('.csv', '').replace('/', '_')}.csv"
+            temp_filename = f"pure_rl_evaluation_results_temp_{scenario_num}_{dataset_path.replace('.csv', '').replace('/', '_')}.csv"
             scenarios_df.iloc[:scenario_num].to_csv(temp_filename, index=False)
             
             # Show current statistics
@@ -409,7 +409,7 @@ def main(dataset_path: Optional[str] = None, verbose: bool = False) -> None:
         print(style_summary)
     
     # Add results to dataframe for final save
-    final_output_file = f"evaluation_results_{int(time())}.csv"
+    final_output_file = f"pure_rl_evaluation_results_{int(time())}.csv"
     scenarios_df.to_csv(final_output_file, index=False)
     print(f"\n💾 Results saved: {final_output_file}")
       
