@@ -110,7 +110,9 @@ from transformers import AutoTokenizer
 try:
     ACTOR_PREDICTOR_MODEL_PATH = os.environ["ACTOR_PREDICTOR_MODEL_PATH"]
 except KeyError:
-    raise ValueError("Please set ACTOR_PREDICTOR_MODEL_PATH environment variable.")
+    print("Please set ACTOR_PREDICTOR_MODEL_PATH environment variable.")
+    ACTOR_PREDICTOR_MODEL_PATH = None 
+    # raise ValueError("Please set ACTOR_PREDICTOR_MODEL_PATH environment variable.")
 
 ACTOR_PREDICTOR_MODEL = None
 ACTOR_PREDICTOR_TOKENIZER = None 
@@ -180,20 +182,13 @@ def process_message(message):
 
 GOAL_ICON_CACHE = dict()
 
-def get_location_icon(location, map_size: int, image_array: np.ndarray, env):
+def get_location_icon(location, map_size: int, image_array: np.ndarray):
     """
     Split an image into a map_size x map_size grid of equal patches and
     return the patch at grid location (row, col).
 
     Works for 2D (H, W) and 3D (H, W, C) arrays.
     """
-    
-    env_id = id(env)
-    if env_id not in GOAL_ICON_CACHE:
-        GOAL_ICON_CACHE[env_id] = dict()
-        
-    if location in GOAL_ICON_CACHE[env_id]:
-        return GOAL_ICON_CACHE[env_id][location]
     
     if image_array.ndim not in (2, 3):
         raise ValueError("image_array must be 2D (H, W) or 3D (H, W, C)")
@@ -216,8 +211,6 @@ def get_location_icon(location, map_size: int, image_array: np.ndarray, env):
         patches = image_array.reshape(map_size, ph, map_size, pw, C).swapaxes(1, 2)
         # shape: (map_size, map_size, ph, pw, C)
 
-    # save to cache 
-    GOAL_ICON_CACHE[env_id][location] = patches[r, c]
 
     return patches[r, c]
 
@@ -225,7 +218,7 @@ CALLING_COUNTER = 0
 TIME_CHECKPOINT = time.time()
 
 
-def local_render(env, width, height, pos_state, tile_size):
+def local_render(grid, width, height, pos_state, tile_size):
     highlight_mask = np.zeros(shape=(width, height), dtype=bool)
     agent_pos, agent_dir = pos_state
     # Get agent locations
@@ -246,7 +239,7 @@ def local_render(env, width, height, pos_state, tile_size):
     for j in range(0, height):
         for i in range(0, width):
             assert highlight_mask is not None
-            cell = env.grid.get(i, j)
+            cell = grid.get(i, j)
             tile_img = Grid.render_tile(
                 cell,
                 agent=location_to_agent[i, j],
@@ -302,8 +295,9 @@ def neuro_predict(env, goal, behavior_type, successors, pos_state):
     else:
         
         width, height = env.width, env.height
-        tile_size = 32  # Increased tile size for better resolution
-        the_image = local_render(env, width, height, pos_state, tile_size)
+        grid = env.grid
+        tile_size = 13  # Increased tile size for better resolution
+        the_image = local_render(grid, width, height, pos_state, tile_size)
         IMAGE_FIFO_CACHE.put(the_image_key, the_image)
         
     # # debug image save 
@@ -320,7 +314,7 @@ def neuro_predict(env, goal, behavior_type, successors, pos_state):
     if goal_desc_key in IMAGE_FIFO_CACHE.cache:
         goal_desc = IMAGE_FIFO_CACHE.get(goal_desc_key)
     else:
-        goal_desc = get_location_icon(goal, map_size, the_image, env)
+        goal_desc = get_location_icon(goal, map_size, the_image)
         IMAGE_FIFO_CACHE.put(goal_desc_key, goal_desc)
         
     noise = np.random.normal(0, 10, the_image.shape).astype(np.uint8)

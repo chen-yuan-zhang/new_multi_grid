@@ -28,4 +28,7 @@ env.sh
 unsloth_compiled_cache/
 multigrid/pure_rl/demo_observer_obs/
 multigrid/pure_rl/ppo_observer_checkpoints
-data/
+
+data/training_data/actor_moves_dataset/
+**/__pycache__
+**/.ipynb_checkpoints/*

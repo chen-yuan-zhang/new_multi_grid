@@ -284,9 +284,26 @@ class BeliefUpdateObserver(BaseAgent):
             log_values = list(log_tran_probs.values())
             if log_values:
                 log_total = self.logsumexp(log_values)
+                
+                # Check for invalid log_total
+                if np.isnan(log_total) or np.isinf(log_total):
+                    print(f"⚠️  Invalid log_total detected: {log_total}")
+                    print(f"   log_values: {log_values}")
+                    print(f"   log_tran_probs: {log_tran_probs}")
+                    
+                
                 # Convert to regular space with normalization
                 for succ_state in log_tran_probs:
                     normalized_log_prob = log_tran_probs[succ_state] - log_total
+                    
+                    # Check for NaN in normalized value
+                    if np.isnan(normalized_log_prob):
+                        print(f"⚠️  NaN detected in normalized_log_prob")
+                        print(f"   succ_state: {succ_state}")
+                        print(f"   log_tran_probs[succ_state]: {log_tran_probs[succ_state]}")
+                        print(f"   log_total: {log_total}")
+                        
+                    
                     # Convert back to regular space for compatibility
                     tran_probs[succ_state] = np.exp(normalized_log_prob) if normalized_log_prob > -700 else 0.0
             else:

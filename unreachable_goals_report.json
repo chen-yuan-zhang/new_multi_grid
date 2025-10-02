@@ -1,0 +1,146 @@
+[
+  {
+    "scenario_idx": 754,
+    "target_pos": [
+      11,
+      1
+    ],
+    "all_reachable": false,
+    "reachable_goals": [
+      [
+        3,
+        12
+      ],
+      [
+        9,
+        2
+      ]
+    ],
+    "unreachable_goals": [
+      [
+        13,
+        10
+      ]
+    ]
+  },
+  {
+    "scenario_idx": 755,
+    "target_pos": [
+      11,
+      1
+    ],
+    "all_reachable": false,
+    "reachable_goals": [
+      [
+        3,
+        12
+      ],
+      [
+        9,
+        2
+      ]
+    ],
+    "unreachable_goals": [
+      [
+        13,
+        10
+      ]
+    ]
+  },
+  {
+    "scenario_idx": 840,
+    "target_pos": [
+      9,
+      13
+    ],
+    "all_reachable": false,
+    "reachable_goals": [
+      [
+        11,
+        7
+      ],
+      [
+        8,
+        1
+      ]
+    ],
+    "unreachable_goals": [
+      [
+        1,
+        13
+      ]
+    ]
+  },
+  {
+    "scenario_idx": 841,
+    "target_pos": [
+      9,
+      13
+    ],
+    "all_reachable": false,
+    "reachable_goals": [
+      [
+        11,
+        7
+      ],
+      [
+        8,
+        1
+      ]
+    ],
+    "unreachable_goals": [
+      [
+        1,
+        13
+      ]
+    ]
+  },
+  {
+    "scenario_idx": 842,
+    "target_pos": [
+      9,
+      13
+    ],
+    "all_reachable": false,
+    "reachable_goals": [
+      [
+        11,
+        7
+      ],
+      [
+        8,
+        1
+      ]
+    ],
+    "unreachable_goals": [
+      [
+        1,
+        13
+      ]
+    ]
+  },
+  {
+    "scenario_idx": 843,
+    "target_pos": [
+      9,
+      13
+    ],
+    "all_reachable": false,
+    "reachable_goals": [
+      [
+        11,
+        7
+      ],
+      [
+        8,
+        1
+      ]
+    ],
+    "unreachable_goals": [
+      [
+        1,
+        13
+      ]
+    ]
+  }
+]
