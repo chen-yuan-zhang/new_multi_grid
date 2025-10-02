@@ -290,7 +290,7 @@ class BeliefUpdateObserver(BaseAgent):
                     print(f"⚠️  Invalid log_total detected: {log_total}")
                     print(f"   log_values: {log_values}")
                     print(f"   log_tran_probs: {log_tran_probs}")
-                    breakpoint()
+                    
                 
                 # Convert to regular space with normalization
                 for succ_state in log_tran_probs:
@@ -302,7 +302,7 @@ class BeliefUpdateObserver(BaseAgent):
                         print(f"   succ_state: {succ_state}")
                         print(f"   log_tran_probs[succ_state]: {log_tran_probs[succ_state]}")
                         print(f"   log_total: {log_total}")
-                        breakpoint()
+                        
                     
                     # Convert back to regular space for compatibility
                     tran_probs[succ_state] = np.exp(normalized_log_prob) if normalized_log_prob > -700 else 0.0
