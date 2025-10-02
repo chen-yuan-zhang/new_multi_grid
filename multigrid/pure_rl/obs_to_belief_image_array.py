@@ -101,7 +101,7 @@ def preprocess_obs_for_rl_policy(belief_update_observer, obs):
     Returns:
     np.ndarray: Processed image array (H, W, 3).
     """
-    belief_img, _ = obs_to_belief_image_array(belief_update_observer, None, obs, add_noise=True)
+    belief_img, _ = obs_to_belief_image_array(belief_update_observer, None, obs, add_noise=False)
     belief_img = (belief_img.astype(np.float32) / 128.0) - 1.0
     
     return belief_img
