@@ -150,15 +150,18 @@ if __name__ == "__main__":
         
         # Get evaluation metrics
         eval_reward = None
-        if "evaluation" in result:
-            eval_reward = result["evaluation"].get("episode_return_mean")
+        eval_results = result['evaluation']
+        eval_ep_ret = (eval_results.get("env_runners", {}) or {}).get("episode_return_mean")
         
+        if eval_ep_ret is not None:
+            eval_reward = eval_ep_ret
+
+
         print(f"Iter {i}  episode_return_mean={ep_ret:.2f}", end="")
         if eval_reward is not None:
             print(f"  eval_reward={eval_reward:.2f}")
         else:
-            print()
-
+            raise NotImplementedError("Evaluation reward should not be None here.")
         # Save latest checkpoint every 50 iterations
         if i % 50 == 0:
             save_dir = os.path.join(os.environ['WORKING_DIR'], f"data/model_data/{TRAIN_DATA_PATH}/ppo_observer_checkpoints")
