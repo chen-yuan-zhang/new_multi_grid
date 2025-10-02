@@ -9,6 +9,14 @@ opencv-python
 pandas
 qwen-vl-utils
 wandb
-"unsloth[cu124-torch240] @ git+https://github.com/unslothai/unsloth.git"
-'torchao==0.11.0'
 loguru
+"unsloth[cu124-torch240] @ git+https://github.com/unslothai/unsloth.git"
+
+--index-url https://download.pytorch.org/whl/cu124
+torch==2.4.1
+torchvision==0.19.1
+torchaudio==2.4.1 
+'torchao==0.11.0'
+"ray[rllib]"
+tensorboard
+

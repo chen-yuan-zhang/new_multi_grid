@@ -277,6 +277,13 @@ def main(dataset_path: Optional[str] = None, verbose: bool = False) -> None:
             scenarios_df.loc[idx, 'final_confidence'] = results.get('final_confidence', 0.0)
             scenarios_df.loc[idx, 'max_confidence_reached'] = results.get('max_confidence_reached', 0.0)
             
+            # Store cache statistics
+            cache_stats = results.get('cache_stats', {})
+            scenarios_df.loc[idx, 'cache_hit_rate'] = cache_stats.get('hit_rate', 0.0)
+            scenarios_df.loc[idx, 'cache_hits'] = cache_stats.get('hits', 0)
+            scenarios_df.loc[idx, 'cache_misses'] = cache_stats.get('misses', 0)
+            scenarios_df.loc[idx, 'cache_size'] = cache_stats.get('size', 0)
+            
             if success:
                 success_count += 1
                 convergence_step_sum += convergence_step
@@ -322,18 +329,41 @@ def main(dataset_path: Optional[str] = None, verbose: bool = False) -> None:
     
     print(f"   Total time: {total_time:.1f}s")
     
-    # Visibility statistics
-    completed_scenarios = scenarios_df.dropna(subset=['visibility_ratio'])
+    # Execution time statistics
+    completed_scenarios = scenarios_df.dropna(subset=['eval_execution_time'])
     if len(completed_scenarios) > 0:
-        avg_visibility = completed_scenarios['visibility_ratio'].mean()
-        avg_changes = completed_scenarios['visibility_changes'].mean()
+        avg_exec_time = completed_scenarios['eval_execution_time'].mean()
+        min_exec_time = completed_scenarios['eval_execution_time'].min()
+        max_exec_time = completed_scenarios['eval_execution_time'].max()
+        print(f"\n⏱️  Execution Time Per Scenario:")
+        print(f"   Average: {avg_exec_time:.3f}s")
+        print(f"   Min: {min_exec_time:.3f}s")
+        print(f"   Max: {max_exec_time:.3f}s")
+        print(f"   Total evaluation time: {total_execution_time:.1f}s")
+    
+    # Cache statistics
+    cache_scenarios = scenarios_df.dropna(subset=['cache_hit_rate'])
+    if len(cache_scenarios) > 0:
+        avg_cache_hit_rate = cache_scenarios['cache_hit_rate'].mean()
+        total_cache_hits = cache_scenarios['cache_hits'].sum()
+        total_cache_misses = cache_scenarios['cache_misses'].sum()
+        print(f"\n💾 Cache Performance:")
+        print(f"   Avg hit rate: {avg_cache_hit_rate:.1%}")
+        print(f"   Total hits: {int(total_cache_hits)}")
+        print(f"   Total misses: {int(total_cache_misses)}")
+    
+    # Visibility statistics
+    visibility_scenarios = scenarios_df.dropna(subset=['visibility_ratio'])
+    if len(visibility_scenarios) > 0:
+        avg_visibility = visibility_scenarios['visibility_ratio'].mean()
+        avg_changes = visibility_scenarios['visibility_changes'].mean()
         print(f"\n👁️  Visibility Analysis:")
         print(f"   Avg visibility ratio: {avg_visibility:.1%}")
         print(f"   Avg visibility changes: {avg_changes:.1f}")
         
         # Success vs visibility correlation
-        successful_results = completed_scenarios[completed_scenarios['eval_success'] == True]
-        failed_results = completed_scenarios[completed_scenarios['eval_success'] == False]
+        successful_results = visibility_scenarios[visibility_scenarios['eval_success'] == True]
+        failed_results = visibility_scenarios[visibility_scenarios['eval_success'] == False]
         
         if len(successful_results) > 0 and len(failed_results) > 0:
             success_visibility = successful_results['visibility_ratio'].mean()

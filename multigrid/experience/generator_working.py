@@ -2,13 +2,41 @@
 Working Dataset Generator for Goal Recognition Experiments
 
 Based on the original generator structure but with improved organization.
+Saves as pickle format. Does NOT store pre-rendered images to minimize file size.
+Instead, stores base_gri    # Save results as compressed pickle with timestamp
+    if results:
+        timestamp = int(time.time())
+        output_file = f"results_{timestamp}.pkl.gz"
+        
+        print(f"\n💾 Saving {len(results)} scenarios to pickle format...")
+        with gzip.open(output_file, 'wb') as f:
+            pickle.dump(results, f, protocol=pickle.HIGHEST_PROTOCOL)
+        
+        print(f"✅ Dataset saved to: {output_file}")
+        
+        # Delete the last checkpoint file now that final file is saved
+        if last_checkpoint_file and os.path.exists(last_checkpoint_file):
+            try:
+                os.remove(last_checkpoint_file)
+                print(f"🗑️  Deleted final checkpoint: {last_checkpoint_file}")
+            except Exception as e:
+                print(f"⚠️  Could not delete final checkpoint: {e}")
+        
+        # Print summary statistics
+        print(f"\n📊 Dataset Summary:")
+        print(f"  Total scenarios: {len(results)}")ory states (target_pos, target_dir) so users 
+can render images themselves if needed.
+Only keeps trajectories with >5 steps for meaningful goal recognition.
 """
 
 import random
 import numpy as np
 import pandas as pd
-import json
-
+import pickle
+import gzip
+import time
+import os
+import argparse
 from multigrid.envs.goal_prediction import AGREnv
 from multigrid.gr_pursuer.agents.target import AstarTarget
 
@@ -18,7 +46,7 @@ def set_all_seed(seed):
     np.random.seed(seed)
 
 # Configuration
-SEED = 123
+SEED = 42
 set_all_seed(SEED)
 
 def generate_hidden_cost_matrices(size, base_grid):
@@ -52,48 +80,67 @@ def generate_hidden_cost_matrices(size, base_grid):
     return [cost_matrix_1, cost_matrix_2, cost_matrix_3, cost_matrix_4]
 
 def generate_trajectory(env):
-    """Generate actor trajectory with hidden costs."""
+    """Generate actor trajectory with hidden costs. Compute full path once with A*, store minimal state info."""
     obs, info = env.reset()
     target_agent = AstarTarget(env)
     
-    all_actions = []
-    all_imgs = []
+    # Compute the full path once using A* with hidden costs
+    try:
+        # Trigger A* to compute the full path by calling compute_action once
+        first_action = target_agent.compute_action(obs)
+        
+        # Now target_agent.path contains the full path: [(action, (pos, dir)), ...]
+        if target_agent.path is None or len(target_agent.path) <= 1:
+            return [], []
+        
+        # Extract just the actions from the path
+        # path format: [(action, (pos, dir)), ...]
+        # Note: index 0 is the initial state, so actions start from index 1
+        all_actions = [step[0] for step in target_agent.path[1:]]
+        
+        if len(all_actions) == 0:
+            return [], []
+            
+    except Exception as e:
+        print(f"          ⚠️  Error computing path: {e}")
+        return [], []
+    
+    # Reset environment and execute the precomputed path, collecting minimal observations
+    obs, info = env.reset()
     all_obs = []
     
-    step = 0
-    max_steps = 100
+    for step, target_action in enumerate(all_actions):
+        # Store only position and direction (minimal data to reduce file size)
+        # Users can render images themselves using: env.grid.render(tile_size=32, agents=[target_agent], highlight_mask=None)
+        # along with base_grid, target_pos, target_dir from the saved data
+        all_obs.append({
+            'target_pos': obs[1]['target_pos'],
+            'target_dir': obs[1]['target_dir']
+        })
+        
+        # Execute action
+        actions = {agent.index: 3 for agent in env.unwrapped.agents}
+        actions[1] = target_action
+        obs, _, _, _, _ = env.step(actions)
+        
+        # Check if we've reached the goal
+        if env.unwrapped.is_done():
+            break
     
-    while not env.unwrapped.is_done() and step < max_steps:
-        # Store observation and image
-        all_obs.append(obs[1])  # Target agent observation
-        all_imgs.append(env.grid.render(tile_size=32, agents=env.unwrapped.agents[1:], highlight_mask=None))
-        
-        # Get target action
-        target_action = target_agent.compute_action(obs)
-        all_actions.append(target_action)
-        
-        # Create actions for all agents
-        # Observer stays still (Action 6 = stay) to not interfere with target trajectory
-        actions = {agent.index: 6 for agent in env.unwrapped.agents}  # 6 = Action.stay
-        actions[1] = target_action  # Target is agent 1 (moves according to hidden costs)
-        
-        # Step environment
-        obs, reward, terminated, truncated, info = env.step(actions)
-        step += 1
-    
-    return all_actions, all_imgs, all_obs
+    return all_actions, all_obs
 
-def main():
+def main(num_layouts):
     """Generate the dataset."""
     
     # Parameters - systematic dataset generation
     sizes = [10, 12, 15]  # Different environment sizes
     initial_distances = [3, 5, 7]  # Different starting distances
-    num_layouts = 5  # Number of different layouts per configuration
-    num_scenarios = 4  # Number of different start position scenarios per layout
+    num_scenarios = 5  # Number of different start position scenarios per layout
     style_names = ["like_wall", "hate_wall", "like_edge", "hate_edge"]
     
     results = []
+    checkpoint_interval = 9999999  # Save checkpoint every 50 scenarios
+    last_checkpoint_file = None  # Track the last checkpoint file to delete it later
     
     print("🎯 Generating Goal Recognition Dataset")
     print(f"Grid sizes: {sizes}")
@@ -102,6 +149,7 @@ def main():
     print(f"Scenarios per layout: {num_scenarios}")
     print(f"Behavior styles: {len(style_names)}")
     print(f"Total scenarios: {len(sizes) * len(initial_distances) * num_layouts * num_scenarios * len(style_names)}")
+    print(f"Checkpoint interval: every {checkpoint_interval} scenarios")
     print()
 
     for size in sizes:
@@ -153,70 +201,152 @@ def main():
                                 agents_start_pos=agents_start_pos
                             )
                             
-                            # Generate trajectory
-                            all_actions, all_imgs, all_obs = generate_trajectory(env_agents)
+                            # Generate trajectory (no images, just minimal state info for rendering later)
+                            all_actions, all_obs = generate_trajectory(env_agents)
                             env_agents.close()
                             
-                            # Save result
+                            # Only keep trajectories with more than 5 steps for meaningful goal recognition
+                            if len(all_actions) <= 5:
+                                print(f"          ⚠️  Skipped: trajectory too short ({len(all_actions)} steps)")
+                                continue
+                            
+                            # Save result with base_grid included for later rendering
+                            # Users can render images using: env.grid.render() with base_grid, target_pos, target_dir
                             result = {
-                                "base_grid": json.dumps(base_grid.tolist()),
-                                "hidden_cost": json.dumps(hidden_cost.tolist()),
-                                "observer_pos": agents_start_pos[0],
-                                "target_pos": agents_start_pos[1],
-                                "observer_dir": agents_start_dir[0],
-                                "target_dir": agents_start_dir[1],
                                 'size': size,
                                 'layout_id': layout_id,
                                 'initial_distance': initial_distance,
                                 'scenario_id': scenario_id,
                                 'hidden_cost_type': style_id,
-                                'hidden_cost_style': style_name,
+                                'base_grid': base_grid,  # Include base_grid for rendering
+                                'start_positions': agents_start_pos,  # Both observer and target positions
+                                'start_directions': agents_start_dir,  # Both observer and target directions
                                 'goals': goals,
                                 'goal': goal,
-                                'all_actions': json.dumps([a.value for a in all_actions]),
-                                'all_imgs': all_imgs,
-                                'all_obs': all_obs,
-                                'total_steps': len(all_actions)
+                                'all_actions': all_actions,  # Keep as Action objects
+                                'all_obs': all_obs  # Only target_pos and target_dir - enough to reconstruct trajectory
                             }
                             
                             results.append(result)
                             print(f"          ✅ Generated {len(all_actions)} steps | Total: {len(results)}")
                             
-                        except Exception as e:
-                            print(f"          ❌ Error: {e}")
+                            # Periodic checkpoint to avoid losing all progress
+                            if len(results) % checkpoint_interval == 0:
+                                # Delete previous checkpoint before creating new one
+                                if last_checkpoint_file and os.path.exists(last_checkpoint_file):
+                                    try:
+                                        os.remove(last_checkpoint_file)
+                                        print(f"🗑️  Deleted old checkpoint: {last_checkpoint_file}")
+                                    except Exception as e:
+                                        print(f"⚠️  Could not delete old checkpoint: {e}")
+                                
+                                # Save new checkpoint
+                                timestamp = int(time.time())
+                                checkpoint_file = f"checkpoint_{timestamp}.pkl.gz"
+                                print(f"\n💾 Checkpoint: Saving {len(results)} scenarios to {checkpoint_file}...")
+                                with gzip.open(checkpoint_file, 'wb') as f:
+                                    pickle.dump(results, f, protocol=pickle.HIGHEST_PROTOCOL)
+                                print(f"✅ Checkpoint saved\n")
+                                last_checkpoint_file = checkpoint_file
+                            
+                        except KeyboardInterrupt:
+                            print(f"\n⚠️  Interrupted by user. Saving {len(results)} results collected so far...")
+                            raise  # Re-raise to exit and save
+                        except MemoryError:
+                            print(f"          ❌ Memory Error: Out of memory, skipping this scenario")
                             continue
+                        except Exception as e:
+                            import traceback
+                            print(f"          ❌ Error: {e}")
+                            print(f"          Stack trace: {traceback.format_exc()}")
+                            continue
+                        finally:
+                            # Ensure environment is closed even if error occurs
+                            try:
+                                env_agents.close()
+                            except:
+                                pass
 
-    # Save results
+    # Save results as compressed pickle with timestamp
     if results:
-        df = pd.DataFrame(results)
+        timestamp = int(time.time())
+        output_file = f"results_{timestamp}.pkl.gz"
+        csv_file = f"results_{timestamp}.csv"
         
+        print(f"\n💾 Saving {len(results)} scenarios to pickle format...")
+        with gzip.open(output_file, 'wb') as f:
+            pickle.dump(results, f, protocol=pickle.HIGHEST_PROTOCOL)
+        
+        print(f"✅ Dataset saved to: {output_file}")
+        
+        # Delete the last checkpoint file now that final file is saved
+        if last_checkpoint_file and os.path.exists(last_checkpoint_file):
+            try:
+                os.remove(last_checkpoint_file)
+                print(f"🗑️  Deleted final checkpoint: {last_checkpoint_file}")
+            except Exception as e:
+                print(f"⚠️  Could not delete final checkpoint: {e}")
+        
+        # Generate CSV file compatible with main.py
+        print(f"\n📄 Generating CSV file for main.py...")
+        csv_data = []
+        
+        # Regenerate hidden cost matrices for CSV (since we need them for main.py)
+        for r in results:
+            # Reconstruct hidden costs from base_grid
+            hidden_costs = generate_hidden_cost_matrices(r['size'], r['base_grid'])
+            hidden_cost = hidden_costs[r['hidden_cost_type']]
+            
+            csv_data.append({
+                'size': r['size'],
+                'layout_id': r['layout_id'],
+                'initial_distance': r['initial_distance'],
+                'scenario_id': r['scenario_id'],
+                'hidden_cost_type': r['hidden_cost_type'],
+                'hidden_cost_style': style_names[r['hidden_cost_type']],  # main.py expects this
+                'base_grid': str(r['base_grid'].tolist()),  # Convert to JSON-compatible string
+                'hidden_cost': str(hidden_cost.tolist()),  # Include actual hidden cost matrix
+                'goals': str(r['goals']),
+                'goal': str(r['goal']),
+                'observer_pos': str(r['start_positions'][0]),  # Observer is agent 0
+                'target_pos': str(r['start_positions'][1]),  # Target is agent 1
+                'observer_dir': r['start_directions'][0],  # Observer direction
+                'target_dir': r['start_directions'][1],  # Target direction
+                'all_actions': str([int(a) for a in r['all_actions']]),  # Convert Action objects to ints
+                'trajectory_length': len(r['all_actions'])
+            })
+        
+        df = pd.DataFrame(csv_data)
+        df.to_csv(csv_file, index=False)
+        print(f"✅ CSV saved to: {csv_file}")
+        print(f"   Compatible with: main.py (full evaluation)")
+        
+        # Print summary statistics
         print(f"\n📊 Dataset Summary:")
-        print(f"  Total scenarios: {len(df)}")
-        print(f"  Grid sizes: {sorted(df['size'].unique())}")
-        print(f"  Behavior styles: {list(df['hidden_cost_style'].unique())}")
-        print(f"  Average trajectory length: {df['total_steps'].mean():.1f} steps")
+        print(f"  Total scenarios: {len(results)}")
         
-        output_file = "formal_dataset_v0.csv"
-        df.to_csv(output_file, index=False)
-        print(f"\n✅ Dataset saved to: {output_file}")
+        sizes = [r['size'] for r in results]
+        print(f"  Grid sizes: {sorted(set(sizes))}")
         
-        # Analyze behavior diversity
-        print(f"\n📊 Behavior Analysis:")
-        behavior_stats = df.groupby('hidden_cost_style').agg({
-            'total_steps': ['mean', 'std', 'count']
-        }).round(2)
-        print(behavior_stats)
+        cost_types = [r['hidden_cost_type'] for r in results]
+        print(f"  Hidden cost types: {sorted(set(cost_types))}")
         
-        # Save detailed behavior analysis
-        behavior_analysis_file = "behavior_analysis_v0.csv"
-        behavior_detailed = df.groupby(['hidden_cost_style', 'size', 'initial_distance']).agg({
-            'total_steps': ['mean', 'std', 'count'],
-            'scenario_id': 'count'
-        }).reset_index()
-        behavior_detailed.to_csv(behavior_analysis_file, index=False)
-        print(f"📈 Behavior analysis saved to: {behavior_analysis_file}")
+        trajectory_lengths = [len(r['all_actions']) for r in results]
+        print(f"  Average trajectory length: {np.mean(trajectory_lengths):.1f} steps")
+        print(f"  Min/Max trajectory length: {min(trajectory_lengths)}/{max(trajectory_lengths)} steps")
+        
+        # Count by behavior style
+        print(f"\n📊 Scenarios by hidden cost type:")
+        for cost_type in sorted(set(cost_types)):
+            count = cost_types.count(cost_type)
+            style_name = style_names[cost_type]
+            print(f"  Type {cost_type} ({style_name}): {count} scenarios")
+        
     else:
         print("\n❌ No scenarios generated successfully")
 
 if __name__ == "__main__":
-    main()
+    args = argparse.ArgumentParser(description="Generate Goal Recognition Dataset")
+    args.add_argument('--num-layouts', type=int, default=30)
+    parsed_args = args.parse_args()
+    main(parsed_args.num_layouts)

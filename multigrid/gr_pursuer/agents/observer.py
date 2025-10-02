@@ -22,7 +22,7 @@ BETA = 1
 BEHAVIOR_TYPES = [0, 1, 2, 3]
 
 class BeliefUpdateObserver(BaseAgent):
-    def __init__(self, env, init_actor_belief = None, init_goal_belief = None, use_neural_predictor = True, use_log_space = True):
+    def __init__(self, env, init_actor_belief = None, init_goal_belief = None, use_neural_predictor = False, use_log_space = True, use_neural_when_in_view_only = False):
         # For Sukai: set use_neural_predictor = True to use neural predictor
         
         super().__init__(env.observer)
@@ -42,6 +42,7 @@ class BeliefUpdateObserver(BaseAgent):
         self.pos = env.observer.pos
         self.dir = env.observer.dir
         self.use_neural_predictor = use_neural_predictor
+        self.use_neural_when_in_view_only = use_neural_when_in_view_only
         self.use_log_space = use_log_space
 
         if init_goal_belief:
@@ -92,10 +93,17 @@ class BeliefUpdateObserver(BaseAgent):
     
     def logaddexp(self, log_a, log_b):
         """Numerically stable log addition: log(exp(log_a) + exp(log_b))."""
+        # Handle NaN cases
+        if np.isnan(log_a) or np.isnan(log_b):
+            return -np.inf  # Treat NaN as zero probability
+        
+        # Handle -inf cases (zero probability)
         if log_a == -np.inf:
             return log_b
         if log_b == -np.inf:
             return log_a
+        
+        # Use numpy's stable implementation for all other cases (including +inf)
         return np.logaddexp(log_a, log_b)
     
     def normalize_actor_beliefs_to_one(self):
@@ -209,7 +217,7 @@ class BeliefUpdateObserver(BaseAgent):
 
         return adjusted_dist_matrix
     
-    def get_cached_transition_probs(self, pos_state, goal, behavior_idx, successors, beta=BETA, use_neural=False):
+    def get_cached_transition_probs(self, pos_state, goal, behavior_idx, successors, beta=BETA, use_neural=False, use_neural_when_in_view_only=False, target_visible=False):
         """
         Get transition probabilities with caching to avoid redundant calculations.
         
@@ -241,6 +249,13 @@ class BeliefUpdateObserver(BaseAgent):
         # Calculate transition probabilities
         tran_probs = {}
         
+        if use_neural and use_neural_when_in_view_only:
+            # check if actor agent in view
+            if target_visible:
+                use_neural = True
+            else:
+                use_neural = False
+        
         if use_neural:
             # Neural predictor version
             formatted_successors = []
@@ -252,22 +267,42 @@ class BeliefUpdateObserver(BaseAgent):
             
         
         if not use_neural:
-            # Symbolic model
+            # Symbolic model - compute in log space to avoid underflow
+            log_tran_probs = {}
             for action, succ in successors:
                 next_pos, next_dir = succ
                 succ_state = ((next_pos[0], next_pos[1]), next_dir)
                 if (succ_state, goal) in self.dist_matrix:
-                    tran_probs[succ_state] = math.exp(-beta * (1 + self.dist_matrix[(succ_state, goal)]))
+                    # Store log probability: log(exp(-beta * (1 + dist))) = -beta * (1 + dist)
+                    log_tran_probs[succ_state] = -beta * (1 + self.dist_matrix[(succ_state, goal)])
                 else:
                     print("should not happen")
                     input()
-                    tran_probs[succ_state] = 0
+                    log_tran_probs[succ_state] = -np.inf
+            
+            # Normalize in log space using logsumexp
+            log_values = list(log_tran_probs.values())
+            if log_values:
+                log_total = self.logsumexp(log_values)
+                # Convert to regular space with normalization
+                for succ_state in log_tran_probs:
+                    normalized_log_prob = log_tran_probs[succ_state] - log_total
+                    # Convert back to regular space for compatibility
+                    tran_probs[succ_state] = np.exp(normalized_log_prob) if normalized_log_prob > -700 else 0.0
+            else:
+                # Fallback: uniform distribution if no valid probabilities
+                uniform_prob = 1.0 / len(successors) if successors else 0.0
+                for action, succ in successors:
+                    next_pos, next_dir = succ
+                    succ_state = ((next_pos[0], next_pos[1]), next_dir)
+                    tran_probs[succ_state] = uniform_prob
+                    
         assert len(tran_probs) == len(successors), "Transition probabilities not computed for all successors"
         # Cache the result
         self.transition_prob_cache[cache_key] = tran_probs
         return tran_probs
 
-    def update_actor_belief_multi_cached(self, actor_belief, goals, beta=BETA):
+    def update_actor_belief_multi_cached(self, actor_belief, goals, target_visible, beta=BETA):
         """
         Cached version of update_actor_belief_multi that uses the transition probability cache.
         
@@ -306,23 +341,24 @@ class BeliefUpdateObserver(BaseAgent):
                     if pos[0] == goal[0] and pos[1] == goal[1]:
                         successors = list(filter(lambda x: x[0] == Action.stay, successors))
 
-                    # Get cached transition probabilities
-                    tran_probs = self.get_cached_transition_probs(pos_state, goal, behavior_idx, successors, beta, self.use_neural_predictor)
+                    # Get cached transition probabilities (already normalized)
+                    tran_probs = self.get_cached_transition_probs(pos_state, goal, behavior_idx, successors, beta, self.use_neural_predictor, self.use_neural_when_in_view_only, target_visible)
+                    
+                    # Verify transition probabilities sum to ~1 (sanity check)
+                    total_prob = sum(tran_probs.values())
+                    if total_prob < 1e-10:
+                        # All transition probabilities are effectively zero, skip this cell
+                        continue
                     
                     if self.use_log_space:
-                        # Convert transition probabilities to log-space for normalization
-                        log_probs = [np.log(prob) if prob > 0 else -np.inf for prob in tran_probs.values()]
-                        if not log_probs:
-                            continue
-                        log_total = self.logsumexp(log_probs)
-                        
+                        # Transition probabilities are already normalized, convert directly to log-space
                         # Update belief for each successor in log-space
                         for action, succ in successors:
                             next_pos, next_dir = succ
                             succ_state = ((next_pos[0], next_pos[1]), next_dir)
-                            if succ_state in tran_probs:
-                                # Convert transition prob to log-space and normalize
-                                log_transition_prob = (np.log(tran_probs[succ_state]) if tran_probs[succ_state] > 0 else -np.inf) - log_total
+                            if succ_state in tran_probs and tran_probs[succ_state] > 0:
+                                # Convert normalized transition prob to log-space
+                                log_transition_prob = np.log(tran_probs[succ_state])
                                 # Add in log-space: log(a + b) = log(a) + log(1 + exp(log(b) - log(a)))
                                 current_log_belief = new_actor_belief[goal][behavior_idx][next_pos[0], next_pos[1], next_dir]
                                 new_log_belief = prob + log_transition_prob
@@ -368,13 +404,16 @@ class BeliefUpdateObserver(BaseAgent):
         
         self.pos = observer_obs["observer_pos"]
         self.dir = observer_obs["observer_dir"]
+        
+        target_visible = "target_pos" in observer_obs or self.pos == self.env.target.pos
+        
         self.update_belief(observer_obs) 
         # update the belief based on current observation, each entry is the joint prob P(state, goal, obs history)
         
         self.update_goal_belief() 
         # update the goal belief based on the belief of the observer, each entry is the conditional prob P(goal|obs history)
         # assume goal directed behavior, predict next step belief based on current belief
-        self.actor_belief = self.update_actor_belief_multi_cached(self.actor_belief, self.goals) 
+        self.actor_belief = self.update_actor_belief_multi_cached(self.actor_belief, self.goals, target_visible) 
         # update the actor belief based on the goal belief, each entry is the joint prob P(state, goal, obs history)
         
         # Normalize actor beliefs to ensure probability sums to 1

@@ -7,8 +7,13 @@ if __name__ == "__main__":
 
     # datasets = ["3scenarios_small.csv", "5scenarios_small.csv", "7scenarios_small.csv", "3scenarios_medium.csv", "5scenarios_medium.csv", "10scenarios_medium.csv"]
     # algorithms = ["random", "coverage", "greedy", "agrmcts_goal_max"]
-
-    datasets = ["results_2_temp.csv"]
+    target_limit = 450
+    datasets = [f"pure_rl_evaluation_results_temp_{target_limit}_formal_dataset_v0.csv", f"/home/sukai/Project/chenyuan_project/new_multi_grid/evaluation_results_temp_{target_limit}_formal_dataset_v0.csv", f'ns_only_in_view_evaluation_results_temp_{target_limit}_formal_dataset_v0.csv', f'symbolic_evaluation_results_temp_{target_limit}_formal_dataset_v0.csv']
+    
+    # remove if file not exist
+    import os
+    datasets = [d for d in datasets if os.path.exists(d)]
+    print(f"Found datasets size: {len(datasets)}")
 
     for dataset in datasets:
         all_algorithm_scnerios = []
@@ -22,20 +27,20 @@ if __name__ == "__main__":
 
         #print(f"Dataset: {dataset}")
         scenarios = pd.read_csv(dataset)
+        # limit scenario to first rows 
+        scenarios = scenarios.head(target_limit)
         vals = []
         succs = []
         for j in range(len(scenarios)):
-            if scenarios.loc[j, "first_step"] > 0:
-                vals.append(1 - scenarios.loc[j, "first_step"]/ scenarios.loc[j, "total_step"])
-                succs.append(1)
-
-            else:
-                vals.append(0)
-                succs.append(0)
+            vals.append(scenarios.loc[j, "eval_convergence_step"])
+            succs.append(scenarios.loc[j, "eval_success"])
         convergence = np.mean(vals)
         success_rate = np.mean(succs)
+        avg_exec_times = scenarios["eval_execution_time"].mean()
+        avg_visibility_ratio = scenarios["visibility_ratio"].mean()
+        avg_final_confidence_value = scenarios["final_confidence"].mean()
 
-        print(f"Dataset: {dataset}, Convergence: {convergence:.2f}, Success: {success_rate:.2f}")
+        print(f"Dataset: {dataset}, Results Analysis using {len(scenarios)}/720 instances.\nConvergence: {convergence:.2f}\nSuccess: {success_rate*100:.2f}%\nAvg Exec Time: {avg_exec_times:.2f}s\nAvg Visibility Ratio: {avg_visibility_ratio:.2f}\nAvg Final Confidence: {avg_final_confidence_value:.2f}")
         
         # Read scenarios for each algorithm
         # for algorithm in algorithms:
