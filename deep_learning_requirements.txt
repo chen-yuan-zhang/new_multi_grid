@@ -19,3 +19,4 @@ torchaudio==2.4.1
 'torchao==0.11.0'
 "ray[rllib]"
 tensorboard
+
