@@ -85,9 +85,9 @@ if __name__ == "__main__":
         finetune_attention_modules = True, # False if not finetuning attention layers
         finetune_mlp_modules       = True, # False if not finetuning MLP layers
 
-        r = 32,           # The larger, the higher the accuracy, but might overfit
-        lora_alpha = 64,  # Recommended alpha == r at least
-        lora_dropout = 0.05,
+        r = 128,          # Increased from 32 to 128 for higher capacity
+        lora_alpha = 256, # Increased proportionally (2 * r)
+        lora_dropout = 0.1, # Slightly increased to prevent overfitting with higher rank
         bias = "lora_only", # "none", "all", "lora_only"
         random_state = 3407,
         use_rslora = False,  # We support rank stabilized LoRA
@@ -128,23 +128,22 @@ if __name__ == "__main__":
         data_collator = UnslothVisionDataCollator(model, tokenizer), # Must use!
         train_dataset = converted_dataset,
         eval_dataset = val_converted_dataset,  # Add validation dataset
-        callbacks=[EarlyStoppingCallback(early_stopping_patience=3, early_stopping_threshold=0.01)],
+        callbacks=[EarlyStoppingCallback(early_stopping_patience=5, early_stopping_threshold=0.01)],
         args = SFTConfig(
-            per_device_train_batch_size = 8,    # Increased from 4 to 8 for 24GB VRAM
-            per_device_eval_batch_size = 8,     # Match training batch size
-            gradient_accumulation_steps = 2,    # Reduced from 4 to 2 since we increased batch size
-            warmup_steps = 10,                  # Slightly increased warmup steps
-            # max_steps = 30,
+            per_device_train_batch_size = 12,   # Increased from 8 to 12 to utilize more VRAM
+            per_device_eval_batch_size = 12,    # Match training batch size
+            gradient_accumulation_steps = 1,    # Reduced to 1 since we have large batch size
+            warmup_steps = 20,                  # Increased warmup for larger batch size
             num_train_epochs = 10, # Increase epochs since early stopping will handle this
-            learning_rate = 2e-4,
-            logging_steps = 50,                 # More frequent logging for better monitoring
+            learning_rate = 1.5e-4,             # Slightly reduced LR for larger batch size
+            logging_steps = 50,                 # More frequent logging
             optim = "adamw_8bit",
             weight_decay = 0.01,
             lr_scheduler_type = "cosine",
             seed = 3407,
             output_dir = "outputs_noshuffle" if not if_shuffle else "outputs",
             report_to = "wandb",     # For Weights and Biases
-            save_total_limit=3,                 # Keep more checkpoints with more VRAM
+            save_total_limit=2,                 # Keep more checkpoints with more VRAM
             save_strategy="steps",
             save_steps=250,                     # More frequent saves for better recovery
             
@@ -156,20 +155,11 @@ if __name__ == "__main__":
             # Evaluation and early stopping settings
             eval_strategy="steps",          # Evaluate every eval_steps
             eval_steps=250,                 # More frequent evaluation (was 500)
-            eval_accumulation_steps=2,      # Accumulate eval batches to save memory
+            eval_accumulation_steps=1,      # Accumulate eval batches to save memory
             load_best_model_at_end=True,    # Load the best model when training ends
             metric_for_best_model="eval_loss",  # Use validation loss as the metric
             greater_is_better=False,        # Lower loss is better
-            
-            # Early stopping configuration
-            early_stopping_patience=5,      # Increased patience with more frequent evals
-            early_stopping_threshold=0.005,  # Reduced threshold for more sensitive stopping
-
-            # You MUST put the below items for vision finetuning:
-            remove_unused_columns = False,
-            dataset_text_field = "",
-            dataset_kwargs = {"skip_prepare_dataset": True},
-            max_length = 2048,
+          
         ),
     )
     

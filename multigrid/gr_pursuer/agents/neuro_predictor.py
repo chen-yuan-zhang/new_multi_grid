@@ -296,7 +296,7 @@ def neuro_predict(env, goal, behavior_type, successors, pos_state):
         
         width, height = env.width, env.height
         grid = env.grid
-        tile_size = 32  # Increased tile size for better resolution
+        tile_size = 13  # Increased tile size for better resolution
         the_image = local_render(grid, width, height, pos_state, tile_size)
         IMAGE_FIFO_CACHE.put(the_image_key, the_image)
         
