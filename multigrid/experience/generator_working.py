@@ -36,7 +36,7 @@ import pickle
 import gzip
 import time
 import os
-
+import argparse
 from multigrid.envs.goal_prediction import AGREnv
 from multigrid.gr_pursuer.agents.target import AstarTarget
 
@@ -129,13 +129,12 @@ def generate_trajectory(env):
     
     return all_actions, all_obs
 
-def main():
+def main(num_layouts):
     """Generate the dataset."""
     
     # Parameters - systematic dataset generation
     sizes = [10, 12, 15]  # Different environment sizes
     initial_distances = [3, 5, 7]  # Different starting distances
-    num_layouts = 30  # Number of different layouts per configuration
     num_scenarios = 5  # Number of different start position scenarios per layout
     style_names = ["like_wall", "hate_wall", "like_edge", "hate_edge"]
     
@@ -347,4 +346,7 @@ def main():
         print("\n❌ No scenarios generated successfully")
 
 if __name__ == "__main__":
-    main()
+    args = argparse.ArgumentParser(description="Generate Goal Recognition Dataset")
+    args.add_argument('--num-layouts', type=int, default=30)
+    parsed_args = args.parse_args()
+    main(parsed_args.num_layouts)
