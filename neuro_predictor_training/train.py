@@ -130,9 +130,9 @@ if __name__ == "__main__":
         eval_dataset = val_converted_dataset,  # Add validation dataset
         callbacks=[EarlyStoppingCallback(early_stopping_patience=5, early_stopping_threshold=0.01)],
         args = SFTConfig(
-            per_device_train_batch_size = 12,   # Increased from 8 to 12 to utilize more VRAM
-            per_device_eval_batch_size = 12,    # Match training batch size
-            gradient_accumulation_steps = 1,    # Reduced to 1 since we have large batch size
+            per_device_train_batch_size = 32,   # Increased from 8 to 12 to utilize more VRAM
+            per_device_eval_batch_size = 32,    # Match training batch size
+            gradient_accumulation_steps = 2,    # Reduced to 1 since we have large batch size
             warmup_steps = 20,                  # Increased warmup for larger batch size
             num_train_epochs = 10, # Increase epochs since early stopping will handle this
             learning_rate = 1.5e-4,             # Slightly reduced LR for larger batch size
@@ -160,6 +160,11 @@ if __name__ == "__main__":
             metric_for_best_model="eval_loss",  # Use validation loss as the metric
             greater_is_better=False,        # Lower loss is better
           
+            # You MUST put the below items for vision finetuning:
+            remove_unused_columns = False,
+            dataset_text_field = "",
+            dataset_kwargs = {"skip_prepare_dataset": True},
+            max_length = 2048,
         ),
     )
     
