@@ -1,7 +1,6 @@
-# train_ppo.py
 import torch
 import ray
-from ray.rllib.algorithms.ppo import PPOConfig
+from ray.rllib.algorithms.sac import SACConfig
 from ray.tune.registry import register_env
 from ray.rllib.models import ModelCatalog
 from ray.rllib.core.learner.torch.torch_learner import TorchLearner
@@ -11,8 +10,6 @@ from observer_model import ObserverVisionTorchRLModule
 from ray.rllib.core.rl_module.rl_module import RLModuleSpec
 from ray.rllib.core.rl_module.default_model_config import DefaultModelConfig
 from time import sleep
-from ray.rllib.examples.envs.classes.action_mask_env import ActionMaskEnv
-
 
 TRAIN_DATA_PATH = "formal_dataset_v0.csv"  # Path to your training dataset CSV
 import argparse
@@ -22,7 +19,7 @@ def make_env(env_config):
 if __name__ == "__main__":
 
     # Add command line argument parsing for checkpoint restoration
-    parser = argparse.ArgumentParser(description='Train PPO with optional checkpoint restoration')
+    parser = argparse.ArgumentParser(description='Train SAC with optional checkpoint restoration')
     parser.add_argument('--restore-checkpoint', type=str, default=None,
                         help='Path to checkpoint directory to restore from')
     parser.add_argument('--start-iter', type=int, default=0,
@@ -45,7 +42,7 @@ if __name__ == "__main__":
     num_gpus = 1 if visible and visible.strip() else 0
 
     config = (
-        PPOConfig()
+        SACConfig()
         # Ensure the NEW stack is on (RLModule/Learner + EnvRunners/ConnectorV2)
         .api_stack(enable_rl_module_and_learner=True,
                    enable_env_runner_and_connector_v2=True)     # :contentReference[oaicite:0]{index=0}
@@ -76,16 +73,14 @@ if __name__ == "__main__":
             num_gpus_per_learner=1,
         )
         .training(
+            twin_q=True,
             gamma=gamma,
-            lr=2.5e-4,
+            actor_lr=2.5e-4,
+            critic_lr=2.5e-4,
+            alpha_lr=2.5e-4,
             num_epochs=10,               # passes over the train batch
             train_batch_size_per_learner=512,  # samples aggregated per update
             minibatch_size=32,
-            lambda_=0.95,
-            kl_coeff=0.5,
-            clip_param=0.1,
-            vf_clip_param=10.0,
-            entropy_coeff=0.01,
             grad_clip=10.0,
             grad_clip_by="global_norm",
         )                                                          # :contentReference[oaicite:2]{index=2}
@@ -138,7 +133,7 @@ if __name__ == "__main__":
                 print("Could not load previous best eval reward, starting fresh")
 
     start_iter = args.start_iter
-    total_iterations = 2000
+    total_iterations = 600
 
     for i in range(start_iter, total_iterations):
         result = algo.train()
@@ -161,7 +156,7 @@ if __name__ == "__main__":
 
         # Save latest checkpoint every 50 iterations
         if i % 50 == 0:
-            save_dir = os.path.join(os.environ['WORKING_DIR'], f"data/model_data/{TRAIN_DATA_PATH}/ppo_observer_checkpoints")
+            save_dir = os.path.join(os.environ['WORKING_DIR'], f"data/model_data/{TRAIN_DATA_PATH}/sac_observer_checkpoints")
             os.makedirs(save_dir, exist_ok=True)
             ckpt = algo.save(save_dir)
             print("Latest checkpoint saved to:", ckpt)
@@ -169,7 +164,7 @@ if __name__ == "__main__":
         # Save best checkpoint based on evaluation results
         if eval_reward is not None and eval_reward > best_eval_reward:
             best_eval_reward = eval_reward
-            best_save_dir = os.path.join(os.environ['WORKING_DIR'], f"data/model_data/{TRAIN_DATA_PATH}/ppo_observer_best_checkpoint")
+            best_save_dir = os.path.join(os.environ['WORKING_DIR'], f"data/model_data/{TRAIN_DATA_PATH}/sac_observer_best_checkpoint")
             os.makedirs(best_save_dir, exist_ok=True)
             best_checkpoint_path = algo.save(best_save_dir)
             print(f"New best checkpoint saved! Eval reward: {eval_reward:.2f} -> {best_checkpoint_path}")

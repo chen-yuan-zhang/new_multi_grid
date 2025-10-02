@@ -10,6 +10,9 @@ from time import sleep
 from multigrid.envs.goal_prediction import AGREnv
 from multigrid.gr_pursuer.agents.observer import BeliefUpdateObserver
 from multigrid.pure_rl.obs_to_belief_image_array import obs_to_belief_image_array
+# import gym action space Discrete
+import gymnasium.spaces as spaces
+
 
 class ObserverEnvDirectRew(gym.Env):
     """
@@ -57,7 +60,7 @@ class ObserverEnvDirectRew(gym.Env):
             agents_start_dir=[observer_dir, target_dir],
             render_mode=self.render_mode,
         )
-        self.action_space = probe_env.unwrapped.agents[0].action_space
+        self.action_space = spaces.Discrete(4) # observer has 4 discrete actions from 0 to 3
         self.observation_space = spaces.Box(low=-1.0, high=1.0, shape=(124, 124, 3), dtype=np.float32)  # belief image
 
         del probe_env
@@ -197,6 +200,7 @@ if __name__ == "__main__":
     }
     
     env = ObserverEnvDirectRew(config)
+    breakpoint()
     obs, info = env.reset()
     breakpoint()
     max_steps = 1000
