@@ -220,8 +220,8 @@ def main():
                                 'scenario_id': scenario_id,
                                 'hidden_cost_type': style_id,
                                 'base_grid': base_grid,  # Include base_grid for rendering
-                                'start_positions': agents_start_pos[1],  # Target position
-                                'start_directions': agents_start_dir[1],  # Target direction
+                                'start_positions': agents_start_pos,  # Both observer and target positions
+                                'start_directions': agents_start_dir,  # Both observer and target directions
                                 'goals': goals,
                                 'goal': goal,
                                 'all_actions': all_actions,  # Keep as Action objects
@@ -268,15 +268,59 @@ def main():
                             except:
                                 pass
 
-    # Save results as compressed pickle (matching original_generator.py format)
+    # Save results as compressed pickle with timestamp
     if results:
-        output_file = "results.pkl.gz"
+        timestamp = int(time.time())
+        output_file = f"results_{timestamp}.pkl.gz"
+        csv_file = f"results_{timestamp}.csv"
         
-        print(f"\n� Saving {len(results)} scenarios to pickle format...")
+        print(f"\n💾 Saving {len(results)} scenarios to pickle format...")
         with gzip.open(output_file, 'wb') as f:
             pickle.dump(results, f, protocol=pickle.HIGHEST_PROTOCOL)
         
         print(f"✅ Dataset saved to: {output_file}")
+        
+        # Delete the last checkpoint file now that final file is saved
+        if last_checkpoint_file and os.path.exists(last_checkpoint_file):
+            try:
+                os.remove(last_checkpoint_file)
+                print(f"🗑️  Deleted final checkpoint: {last_checkpoint_file}")
+            except Exception as e:
+                print(f"⚠️  Could not delete final checkpoint: {e}")
+        
+        # Generate CSV file compatible with main.py
+        print(f"\n📄 Generating CSV file for main.py...")
+        csv_data = []
+        
+        # Regenerate hidden cost matrices for CSV (since we need them for main.py)
+        for r in results:
+            # Reconstruct hidden costs from base_grid
+            hidden_costs = generate_hidden_cost_matrices(r['size'], r['base_grid'])
+            hidden_cost = hidden_costs[r['hidden_cost_type']]
+            
+            csv_data.append({
+                'size': r['size'],
+                'layout_id': r['layout_id'],
+                'initial_distance': r['initial_distance'],
+                'scenario_id': r['scenario_id'],
+                'hidden_cost_type': r['hidden_cost_type'],
+                'hidden_cost_style': style_names[r['hidden_cost_type']],  # main.py expects this
+                'base_grid': str(r['base_grid'].tolist()),  # Convert to JSON-compatible string
+                'hidden_cost': str(hidden_cost.tolist()),  # Include actual hidden cost matrix
+                'goals': str(r['goals']),
+                'goal': str(r['goal']),
+                'observer_pos': str(r['start_positions'][0]),  # Observer is agent 0
+                'target_pos': str(r['start_positions'][1]),  # Target is agent 1
+                'observer_dir': r['start_directions'][0],  # Observer direction
+                'target_dir': r['start_directions'][1],  # Target direction
+                'all_actions': str([int(a) for a in r['all_actions']]),  # Convert Action objects to ints
+                'trajectory_length': len(r['all_actions'])
+            })
+        
+        df = pd.DataFrame(csv_data)
+        df.to_csv(csv_file, index=False)
+        print(f"✅ CSV saved to: {csv_file}")
+        print(f"   Compatible with: main.py (full evaluation)")
         
         # Print summary statistics
         print(f"\n📊 Dataset Summary:")
