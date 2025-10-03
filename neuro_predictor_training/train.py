@@ -14,6 +14,7 @@ import multiprocessing as mp
 from tqdm.auto import tqdm
 import random
 from pathlib import Path
+import numpy as np
 
 SYSTEM_PROMPT="""You are a visuomotor policy for action prediction.
 Given (1) the current observation as an image, (2) a goal as an image icon, and
@@ -40,6 +41,7 @@ Return ONE action token from the allowed set. No extra words.
 """
 
 dataset_path = "/home/sukai/Project/chenyuan_project/new_multi_grid/data/training_data/actor_moves_dataset"
+
 
 
 def convert_to_conversation(sample):
@@ -87,8 +89,8 @@ if __name__ == "__main__":
 
         r = 128,          # Increased from 32 to 128 for higher capacity
         lora_alpha = 256, # Increased proportionally (2 * r)
-        lora_dropout = 0.1, # Slightly increased to prevent overfitting with higher rank
-        bias = "lora_only", # "none", "all", "lora_only"
+        lora_dropout = 0, # No dropout
+        bias = "none", # "none", "all", "lora_only"
         random_state = 3407,
         use_rslora = False,  # We support rank stabilized LoRA
         loftq_config = None, # And LoftQ
@@ -122,19 +124,20 @@ if __name__ == "__main__":
     # train the model 
     FastVisionModel.for_training(model) # Enable for training!
 
+
     trainer = SFTTrainer(
         model = model,
         tokenizer = tokenizer,
         data_collator = UnslothVisionDataCollator(model, tokenizer), # Must use!
         train_dataset = converted_dataset,
         eval_dataset = val_converted_dataset,  # Add validation dataset
-        callbacks=[EarlyStoppingCallback(early_stopping_patience=5, early_stopping_threshold=0.01)],
+        # Removed early stopping callback to train for full epochs
         args = SFTConfig(
             per_device_train_batch_size = 32,   # Increased from 8 to 12 to utilize more VRAM
             per_device_eval_batch_size = 32,    # Match training batch size
             gradient_accumulation_steps = 2,    # Reduced to 1 since we have large batch size
             warmup_steps = 20,                  # Increased warmup for larger batch size
-            num_train_epochs = 10, # Increase epochs since early stopping will handle this
+            num_train_epochs = 4, 
             learning_rate = 1.5e-4,             # Slightly reduced LR for larger batch size
             logging_steps = 50,                 # More frequent logging
             optim = "adamw_8bit",
@@ -143,22 +146,21 @@ if __name__ == "__main__":
             seed = 3407,
             output_dir = "outputs_noshuffle" if not if_shuffle else "outputs",
             report_to = "wandb",     # For Weights and Biases
-            save_total_limit=2,                 # Keep more checkpoints with more VRAM
+            save_total_limit=3,                 # Keep more checkpoints with more VRAM
             save_strategy="steps",
-            save_steps=250,                     # More frequent saves for better recovery
+            save_steps=300,                     # More frequent saves for better recovery
             
             # Memory optimization settings for 24GB VRAM
             dataloader_pin_memory=True,         # Pin memory for faster data transfer
             dataloader_num_workers=4,           # Parallel data loading
-            fp16=False,                         # Keep bf16 from Unsloth (better than fp16)
             
             # Evaluation and early stopping settings
             eval_strategy="steps",          # Evaluate every eval_steps
-            eval_steps=250,                 # More frequent evaluation (was 500)
+            eval_steps=300,                 # More frequent evaluation (was 500)
             eval_accumulation_steps=1,      # Accumulate eval batches to save memory
             load_best_model_at_end=True,    # Load the best model when training ends
-            metric_for_best_model="eval_loss",  # Use validation loss as the metric
-            greater_is_better=False,        # Lower loss is better
+            metric_for_best_model="eval_loss", # Use eval loss to evaluate best model
+            greater_is_better=False,        # Lower eval loss is better
           
             # You MUST put the below items for vision finetuning:
             remove_unused_columns = False,

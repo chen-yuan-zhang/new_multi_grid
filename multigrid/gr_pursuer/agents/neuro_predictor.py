@@ -178,6 +178,7 @@ def process_message(message):
         return_tensors="pt",
     ).to("cuda")
     
+    
     return inputs
 
 GOAL_ICON_CACHE = dict()
@@ -265,7 +266,6 @@ def neuro_predict(env, goal, behavior_type, successors, pos_state):
     Returns:
         action_probs: A numpy array of shape (num_actions,) with probabilities for each action. 
     """
-    
     global ACTOR_PREDICTOR_MODEL, ACTOR_PREDICTOR_TOKENIZER, DEBUG_MODE
     
     global CALLING_COUNTER, TIME_CHECKPOINT
@@ -317,15 +317,15 @@ def neuro_predict(env, goal, behavior_type, successors, pos_state):
         goal_desc = get_location_icon(goal, map_size, the_image)
         IMAGE_FIFO_CACHE.put(goal_desc_key, goal_desc)
         
-    noise = np.random.normal(0, 10, the_image.shape).astype(np.uint8)
-    image_aug = cv2.addWeighted(the_image, 0.9, noise, 0.1, 0)
+    # noise = np.random.normal(0, 10, the_image.shape).astype(np.uint8)
+    # image_aug = cv2.addWeighted(the_image, 0.9, noise, 0.1, 0)
     
     
     # * convert_to_conversation
     sample = {
-        "image": image_aug,
+        "image": the_image,
         "goal_icon": goal_desc,
-        "behavior_description": behavior_type
+        "behavior_description": int(behavior_type)
     } 
     
     message = convert_to_conversation(sample)
@@ -346,7 +346,6 @@ def neuro_predict(env, goal, behavior_type, successors, pos_state):
             for idx, (tok, p) in enumerate(zip(top_tokens[0], top_probs[0])):
                 print(f"Top {idx + 1}: {ACTOR_PREDICTOR_TOKENIZER.decode(tok)}, {float(p)}")
                 
-            breakpoint()
         
         # get logits for action tokens only
         action_logits = logits[:, ACTION_LABEL_IDS]

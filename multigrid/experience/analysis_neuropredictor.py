@@ -163,10 +163,11 @@ def main(dataset_path: Optional[str] = None, verbose: bool = False) -> None:
             'target_dir': scenario_row['target_dir'],
             'target_actions': [Action(v) for v in json.loads(scenario_row['all_actions'])]
         }
-        if 'hidden_cost_style' not in scenario_row:
+        if 'hidden_cost_type' in scenario_row:
             hidden_cost_type = scenario_row['hidden_cost_type']
         else:
-            hidden_cost_type = scenario_row['hidden_cost_style']
+            raise ValueError("Dataset must include 'hidden_cost_type' column.")
+        
         
         correctness = eval_neuro_predictor_using_scenario(scenario_config, hidden_cost_type, verbose)
         if hidden_cost_type not in correctness_dict_by_behavior:
