@@ -87,10 +87,29 @@ class ObserverEnvDirectRew(gym.Env):
         self._terminated = self._truncated = False
         self._step_idx = 0
         
-        # --- randomly pick a scenario row from the CSV ---
-        idx = np.random.randint(len(self.scenarios))
-        scenario = self.scenarios.iloc[idx]
-        print(f"Scenario {idx}")
+        # --- Smart task rotation for balanced multi-task learning ---
+        if not hasattr(self, '_task_rotation_counter'):
+            self._task_rotation_counter = 0
+        
+        # Rotate through different hidden_cost_types to ensure balanced sampling
+        task_types = self.scenarios['hidden_cost_type'].unique()
+        if len(task_types) > 1:
+            target_task_type = task_types[self._task_rotation_counter % len(task_types)]
+            task_scenarios = self.scenarios[self.scenarios['hidden_cost_type'] == target_task_type]
+            
+            if len(task_scenarios) > 0:
+                idx = np.random.randint(len(task_scenarios))
+                scenario = task_scenarios.iloc[idx]
+                self._task_rotation_counter += 1
+                print(f"Task rotation: selected hidden_cost_type={target_task_type}")
+            else:
+                # Fallback to random selection
+                idx = np.random.randint(len(self.scenarios))
+                scenario = self.scenarios.iloc[idx]
+        else:
+            # Only one task type available
+            idx = np.random.randint(len(self.scenarios))
+            scenario = self.scenarios.iloc[idx]
         
         base_grid   = np.array(eval(scenario["base_grid"]))
         goals       = eval(scenario["goals"])
