@@ -257,7 +257,7 @@ def local_render(grid, width, height, pos_state, tile_size):
     return img
 
 
-def neuro_predict(env, goal, behavior_type, successors, pos_state):
+def neuro_predict(env, goal, behavior_type, successors, pos_state, reference_action = None):
     """Predict action probabilities using the neuro predictor model.
     Args:
         env: The environment object with grid and agents.

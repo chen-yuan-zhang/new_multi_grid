@@ -69,9 +69,20 @@ def eval_neuro_predictor_using_scenario(scenario_config: Dict[str, Any], hidden_
         pos_state_param = (env.agents[1].pos, int(env.agents[1].dir))
         successors = get_successor(env, pos_state_param)
         formatted_successors = []
+        actual_succ = None
         for action, succ in successors:
             next_pos, next_dir = succ
             formatted_successors.append((action, ((next_pos[0], next_pos[1]), next_dir)))
+            if target_action == action:
+                actual_succ = ((next_pos[0], next_pos[1]), next_dir)
+        try:
+            assert actual_succ is not None, "Target action not in successors!"
+        except AssertionError as e:
+            print(f"Successors: {successors}")
+            print(f"Target action: {target_action}")
+            breakpoint()
+            raise e
+
         successors_param = formatted_successors
         tran_probs = neuro_predict(
             env = env_param,
@@ -94,7 +105,9 @@ def eval_neuro_predictor_using_scenario(scenario_config: Dict[str, Any], hidden_
                 predict_action = action
                 break
         
-        if int(predict_action) == int(target_action):
+        target_action_formal = int(target_actions[step % len(target_actions)])
+        
+        if int(predict_action) == target_action_formal:
             correctness.append(True)
         else:
             correctness.append(False)
