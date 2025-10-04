@@ -24,7 +24,7 @@ from multigrid.envs.goal_prediction import AGREnv
 from multigrid.gr_pursuer.agents.target import AstarTarget
 from multigrid.gr_pursuer.agents.observer import BeliefUpdateObserver
 from multigrid.core.actions import Action
-
+from multigrid.gr_pursuer.astar import get_successor
 
 def run_scenario(scenario_config: Dict[str, Any], verbose: bool = False) -> Tuple[bool, int, Dict[str, Any]]:
     """

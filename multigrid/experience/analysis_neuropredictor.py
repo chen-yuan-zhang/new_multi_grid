@@ -111,8 +111,14 @@ def eval_neuro_predictor_using_scenario(scenario_config: Dict[str, Any], hidden_
             correctness.append(True)
         else:
             correctness.append(False)
+            
         
         
+        # update environment 
+        actions = {0: 0, 1: target_action_formal}
+        obs, reward, terminated, truncated, info = env.step(actions)
+
+
     # correctness is a list of booleans, convert it into average correctness
     avg_correctness = np.mean(correctness)
     return avg_correctness

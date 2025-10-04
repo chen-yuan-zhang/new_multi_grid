@@ -20,11 +20,11 @@ import json
 from typing import Dict, List, Tuple, Optional, Any
 from time import time
 
-
 from multigrid.envs.goal_prediction import AGREnv
 from multigrid.gr_pursuer.agents.target import AstarTarget
 from multigrid.gr_pursuer.agents.observer import BeliefUpdateObserver
 from multigrid.core.actions import Action
+from multigrid.gr_pursuer.astar import get_successor
 
 from multigrid.pure_rl.obs_to_belief_image_array import preprocess_obs_for_rl_policy
 from ray.rllib.core import DEFAULT_MODULE_ID
@@ -35,7 +35,6 @@ from ray.rllib.utils.numpy import convert_to_numpy, softmax
 import os 
 from time import sleep
 from PIL import Image
-
 
 def run_scenario(scenario_config: Dict[str, Any], verbose: bool = False) -> Tuple[bool, int, Dict[str, Any]]:
     """
@@ -83,7 +82,7 @@ def run_scenario(scenario_config: Dict[str, Any], verbose: bool = False) -> Tupl
     observation, info = env.reset()
     
     # Create observer agent (algorithm under test)
-    observer_agent = BeliefUpdateObserver(env, use_neural_predictor=False)
+    observer_agent = BeliefUpdateObserver(env)
     
     # ! Load RL Policy model 
     ppo_checkpoint_path = os.environ['RL_POLICY_CHECKPOINT_PATH']
@@ -110,10 +109,12 @@ def run_scenario(scenario_config: Dict[str, Any], verbose: bool = False) -> Tupl
     confidence_history = []   # Track max confidence over time
     
     step = 0
+    execution_time = 0.0
+    
+    # Start timing after environment setup is complete
     start_time = time()
     
     try:
-
         for step, target_action in enumerate(target_actions):
             # Check visibility before updating beliefs
             observer_obs = observation[0] if isinstance(observation, dict) and 0 in observation else observation
@@ -151,9 +152,10 @@ def run_scenario(scenario_config: Dict[str, Any], verbose: bool = False) -> Tupl
             
             observer_action = int(np.argmax(logits))
             
-            print(f"      Step {step}: Observer action {observer_action}, Target action {target_actions[step]}, logits {logits}")
+            # print(f"      Step {step}: Observer action {observer_action}, Target action {target_actions[step]}, logits {logits}")
             
             # ! ---- End RL Policy Action Selection ---- !
+
             
             # Step environment with both observer and target actions
             actions = {0: observer_action, 1: target_action}
@@ -189,12 +191,31 @@ def run_scenario(scenario_config: Dict[str, Any], verbose: bool = False) -> Tupl
             
     except Exception as e:
         print(f"      ❌ Error during scenario execution: {e}")
-        return False, -1, {}
+        # Calculate execution time before returning
+        execution_time = time() - start_time
+        try:
+            env.close()
+        except:
+            pass  # Ignore cleanup errors
+        return False, -1, {
+            'execution_time': execution_time,
+            'cache_stats': {},
+            'visibility_ratio': 0.0,
+            'visibility_changes': 0,
+            'visible_steps': 0,
+            'total_trajectory_steps': 0,
+            'visibility_history': '[]',
+            'final_confidence': 0.0,
+            'max_confidence_reached': 0.0
+        }
     
     finally:
-        env.close()
-    
-    execution_time = time() - start_time
+        # Calculate execution time in finally block to ensure it's always calculated
+        execution_time = time() - start_time
+        try:
+            env.close()
+        except:
+            pass  # Ignore cleanup errors
     
     # Final convergence validation - must end with correct prediction and have stable identification
     final_predicted_goal = predicted_goals_history[-1] if predicted_goals_history else None
@@ -242,9 +263,10 @@ def run_scenario(scenario_config: Dict[str, Any], verbose: bool = False) -> Tupl
         'max_confidence_reached': max(confidence_history) if confidence_history else 0.0
     }
     
-    if verbose and success:
+    if verbose:
         print(f"      📊 Execution time: {execution_time:.3f}s")
-        print(f"      💾 Cache hit rate: {results['cache_stats']['hit_rate']:.1%}")
+        if success:
+            print(f"      💾 Cache hit rate: {results['cache_stats']['hit_rate']:.1%}")
     
     return success, convergence_step, results
 
@@ -286,7 +308,7 @@ def main(dataset_path: Optional[str] = None, verbose: bool = False) -> None:
     detailed_results = []
     
     print(f"\n🚀 Starting evaluation...")
-    start_time = time()
+    evaluation_start_time = time()
     
     for i, (idx, scenario_row) in enumerate(scenarios_df.iterrows()):
         scenario_num = i + 1
@@ -328,6 +350,13 @@ def main(dataset_path: Optional[str] = None, verbose: bool = False) -> None:
             scenarios_df.loc[idx, 'final_confidence'] = results.get('final_confidence', 0.0)
             scenarios_df.loc[idx, 'max_confidence_reached'] = results.get('max_confidence_reached', 0.0)
             
+            # Store cache statistics
+            cache_stats = results.get('cache_stats', {})
+            scenarios_df.loc[idx, 'cache_hit_rate'] = cache_stats.get('hit_rate', 0.0)
+            scenarios_df.loc[idx, 'cache_hits'] = cache_stats.get('hits', 0)
+            scenarios_df.loc[idx, 'cache_misses'] = cache_stats.get('misses', 0)
+            scenarios_df.loc[idx, 'cache_size'] = cache_stats.get('size', 0)
+            
             if success:
                 success_count += 1
                 convergence_step_sum += convergence_step
@@ -343,23 +372,30 @@ def main(dataset_path: Optional[str] = None, verbose: bool = False) -> None:
             print(f"❌ Error processing scenario {scenario_num}: {e}")
             scenarios_df.loc[idx, 'eval_success'] = False
             scenarios_df.loc[idx, 'eval_convergence_step'] = -1
+            scenarios_df.loc[idx, 'eval_execution_time'] = 0.0  # Set to 0 for failed scenarios
+            scenarios_df.loc[idx, 'visibility_ratio'] = 0.0
+            scenarios_df.loc[idx, 'visibility_changes'] = 0
+            scenarios_df.loc[idx, 'visible_steps'] = 0
+            scenarios_df.loc[idx, 'total_trajectory_steps'] = 0
+            scenarios_df.loc[idx, 'final_confidence'] = 0.0
+            scenarios_df.loc[idx, 'max_confidence_reached'] = 0.0
             continue
         
         # Save partial results every 50 scenarios or at key milestones
-        if scenario_num % 50 == 0 or scenario_num in [100, 200, 300, 400, 500, 600]:
-            temp_filename = f"pure_rl_evaluation_results_temp_{scenario_num}_{dataset_path.replace('.csv', '').replace('/', '_')}.csv"
-            scenarios_df.iloc[:scenario_num].to_csv(temp_filename, index=False)
+        # if scenario_num % 50 == 0 or scenario_num in [100, 200, 300, 400, 500, 600]:
+        #     temp_filename = f"evaluation_results_temp_{scenario_num}_{dataset_path.replace('.csv', '').replace('/', '_')}.csv"
+        #     scenarios_df.iloc[:scenario_num].to_csv(temp_filename, index=False)
             
-            # Show current statistics
-            current_success = scenarios_df.iloc[:scenario_num]['eval_success'].sum()
-            current_rate = current_success / scenario_num * 100
-            if verbose:
-                print(f"💾 Saved partial results ({scenario_num} scenarios): {temp_filename}")
-                print(f"    Current success rate: {current_rate:.1f}% ({current_success}/{scenario_num})")
-            else:
-                print(f" [Partial: {current_rate:.1f}%]")
+        #     # Show current statistics
+        #     current_success = scenarios_df.iloc[:scenario_num]['eval_success'].sum()
+        #     current_rate = current_success / scenario_num * 100
+        #     if verbose:
+        #         print(f"💾 Saved partial results ({scenario_num} scenarios): {temp_filename}")
+        #         print(f"    Current success rate: {current_rate:.1f}% ({current_success}/{scenario_num})")
+        #     else:
+        #         print(f" [Partial: {current_rate:.1f}%]")
     
-    total_time = time() - start_time
+    total_time = time() - evaluation_start_time
     
     # Calculate and display final statistics
     print(f"\n📊 Evaluation Results:")
@@ -373,18 +409,41 @@ def main(dataset_path: Optional[str] = None, verbose: bool = False) -> None:
     
     print(f"   Total time: {total_time:.1f}s")
     
-    # Visibility statistics
-    completed_scenarios = scenarios_df.dropna(subset=['visibility_ratio'])
+    # Execution time statistics
+    completed_scenarios = scenarios_df.dropna(subset=['eval_execution_time'])
     if len(completed_scenarios) > 0:
-        avg_visibility = completed_scenarios['visibility_ratio'].mean()
-        avg_changes = completed_scenarios['visibility_changes'].mean()
+        avg_exec_time = completed_scenarios['eval_execution_time'].mean()
+        min_exec_time = completed_scenarios['eval_execution_time'].min()
+        max_exec_time = completed_scenarios['eval_execution_time'].max()
+        print(f"\n⏱️  Execution Time Per Scenario:")
+        print(f"   Average: {avg_exec_time:.3f}s")
+        print(f"   Min: {min_exec_time:.3f}s")
+        print(f"   Max: {max_exec_time:.3f}s")
+        print(f"   Total evaluation time: {total_execution_time:.1f}s")
+    
+    # Cache statistics
+    cache_scenarios = scenarios_df.dropna(subset=['cache_hit_rate'])
+    if len(cache_scenarios) > 0:
+        avg_cache_hit_rate = cache_scenarios['cache_hit_rate'].mean()
+        total_cache_hits = cache_scenarios['cache_hits'].sum()
+        total_cache_misses = cache_scenarios['cache_misses'].sum()
+        print(f"\n💾 Cache Performance:")
+        print(f"   Avg hit rate: {avg_cache_hit_rate:.1%}")
+        print(f"   Total hits: {int(total_cache_hits)}")
+        print(f"   Total misses: {int(total_cache_misses)}")
+    
+    # Visibility statistics
+    visibility_scenarios = scenarios_df.dropna(subset=['visibility_ratio'])
+    if len(visibility_scenarios) > 0:
+        avg_visibility = visibility_scenarios['visibility_ratio'].mean()
+        avg_changes = visibility_scenarios['visibility_changes'].mean()
         print(f"\n👁️  Visibility Analysis:")
         print(f"   Avg visibility ratio: {avg_visibility:.1%}")
         print(f"   Avg visibility changes: {avg_changes:.1f}")
         
         # Success vs visibility correlation
-        successful_results = completed_scenarios[completed_scenarios['eval_success'] == True]
-        failed_results = completed_scenarios[completed_scenarios['eval_success'] == False]
+        successful_results = visibility_scenarios[visibility_scenarios['eval_success'] == True]
+        failed_results = visibility_scenarios[visibility_scenarios['eval_success'] == False]
         
         if len(successful_results) > 0 and len(failed_results) > 0:
             success_visibility = successful_results['visibility_ratio'].mean()
@@ -408,8 +467,84 @@ def main(dataset_path: Optional[str] = None, verbose: bool = False) -> None:
         }).round(2)
         print(style_summary)
     
+    # Basic statistics grouped by grid size and initial distance
+    if 'size' in scenarios_df.columns and 'initial_distance' in scenarios_df.columns:
+        print(f"\n📊 Statistics by Grid Size:")
+        size_summary = scenarios_df.groupby('size').agg({
+            'eval_success': ['count', 'sum', 'mean'],
+            'eval_convergence_step': ['mean', 'std'],
+            'eval_execution_time': ['mean', 'std'],
+            'visibility_ratio': 'mean',
+            'final_confidence': 'mean',
+            'max_confidence_reached': 'mean'
+        }).round(3)
+        
+        # Flatten column names for better display
+        size_summary.columns = ['_'.join(col).strip() for col in size_summary.columns.values]
+        size_summary = size_summary.rename(columns={
+            'eval_success_count': 'total_scenarios',
+            'eval_success_sum': 'successful_scenarios', 
+            'eval_success_mean': 'success_rate',
+            'eval_convergence_step_mean': 'avg_convergence_step',
+            'eval_convergence_step_std': 'convergence_step_std',
+            'eval_execution_time_mean': 'avg_execution_time',
+            'eval_execution_time_std': 'execution_time_std',
+            'visibility_ratio_mean': 'avg_visibility_ratio',
+            'final_confidence_mean': 'avg_final_confidence',
+            'max_confidence_reached_mean': 'avg_max_confidence'
+        })
+        print(size_summary)
+        
+        print(f"\n📏 Statistics by Initial Distance:")
+        distance_summary = scenarios_df.groupby('initial_distance').agg({
+            'eval_success': ['count', 'sum', 'mean'],
+            'eval_convergence_step': ['mean', 'std'],
+            'eval_execution_time': ['mean', 'std'],
+            'visibility_ratio': 'mean',
+            'final_confidence': 'mean',
+            'max_confidence_reached': 'mean'
+        }).round(3)
+        
+        # Flatten column names for better display
+        distance_summary.columns = ['_'.join(col).strip() for col in distance_summary.columns.values]
+        distance_summary = distance_summary.rename(columns={
+            'eval_success_count': 'total_scenarios',
+            'eval_success_sum': 'successful_scenarios', 
+            'eval_success_mean': 'success_rate',
+            'eval_convergence_step_mean': 'avg_convergence_step',
+            'eval_convergence_step_std': 'convergence_step_std',
+            'eval_execution_time_mean': 'avg_execution_time',
+            'eval_execution_time_std': 'execution_time_std',
+            'visibility_ratio_mean': 'avg_visibility_ratio',
+            'final_confidence_mean': 'avg_final_confidence',
+            'max_confidence_reached_mean': 'avg_max_confidence'
+        })
+        print(distance_summary)
+        
+        print(f"\n🎯 Combined Statistics by Grid Size and Initial Distance:")
+        combined_summary = scenarios_df.groupby(['size', 'initial_distance']).agg({
+            'eval_success': ['count', 'sum', 'mean'],
+            'eval_convergence_step': 'mean',
+            'eval_execution_time': 'mean',
+            'visibility_ratio': 'mean',
+            'final_confidence': 'mean'
+        }).round(3)
+        
+        # Flatten column names for better display
+        combined_summary.columns = ['_'.join(col).strip() for col in combined_summary.columns.values]
+        combined_summary = combined_summary.rename(columns={
+            'eval_success_count': 'scenarios',
+            'eval_success_sum': 'successful', 
+            'eval_success_mean': 'success_rate',
+            'eval_convergence_step_mean': 'avg_conv_step',
+            'eval_execution_time_mean': 'avg_exec_time',
+            'visibility_ratio_mean': 'avg_visibility',
+            'final_confidence_mean': 'avg_confidence'
+        })
+        print(combined_summary)
+    
     # Add results to dataframe for final save
-    final_output_file = f"pure_rl_evaluation_results_{int(time())}.csv"
+    final_output_file = f"rl_only_evaluation_results_training.csv"
     scenarios_df.to_csv(final_output_file, index=False)
     print(f"\n💾 Results saved: {final_output_file}")
       
