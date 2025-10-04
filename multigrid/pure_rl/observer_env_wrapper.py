@@ -12,7 +12,7 @@ from multigrid.gr_pursuer.agents.observer import BeliefUpdateObserver
 from multigrid.pure_rl.obs_to_belief_image_array import obs_to_belief_image_array
 # import gym action space Discrete
 import gymnasium.spaces as spaces
-
+from scipy.stats import entropy
 
 class ObserverEnvDirectRew(gym.Env):
     """
@@ -177,13 +177,11 @@ class ObserverEnvDirectRew(gym.Env):
         goal_belief = augmented_obs[0]['goal_belief']
         
         
-        belief_img, log_belief_sum = obs_to_belief_image_array(self.belief_observer, None, next_obs[0], add_noise=True)
+        belief_img, log_belief_sum = obs_to_belief_image_array(self.belief_observer, None, next_obs[0], add_noise=False)
         
         belief_img = (belief_img.astype(np.float32) / 128.0) - 1.0
         
-        # log_belief_sum is array (H,W), try to normalize it so max is 1 and min is 0
-        # curr value is ranged from -20 to -5
-        log_belief_sum = (log_belief_sum - np.min(log_belief_sum)) / (np.max(log_belief_sum) - np.min(log_belief_sum) + 1e-10)
+       
         
         infos = {}
         
