@@ -36,6 +36,8 @@ import os
 from time import sleep
 from PIL import Image
 
+RL_CASE = 'one_step' # 'one_step' or 'iterate'
+
 def run_scenario(scenario_config: Dict[str, Any], verbose: bool = False) -> Tuple[bool, int, Dict[str, Any]]:
     """
     Run a single goal recognition scenario.
@@ -129,33 +131,51 @@ def run_scenario(scenario_config: Dict[str, Any], verbose: bool = False) -> Tupl
             _ = observer_agent.compute_action(observation[0])
             
             # ! ---- RL Policy Action Selection ---- !
-            obs_processed = preprocess_obs_for_rl_policy(
-                belief_update_observer=observer_agent,
-                obs=observation[0],
-                behavior_type=hidden_cost_type,
-            )
-            
-            # * temp save the processed obs
-            # vis_img = ((obs_processed + 1.0) * 128.0).astype(np.uint8)
-            # vis_img = np.clip(vis_img, 0, 255)
-            # # save vis_img
-            # save_dir = os.path.join(os.environ['PYTHONPATH'], 'rl_demo_observer_obs')
-            # os.makedirs(save_dir, exist_ok=True)
-            # img_pil = Image.fromarray(vis_img)
-            # img_pil.save(os.path.join(save_dir, f'step_{step+1}_belief_new.png'))
-            # * --- end of temp save ---
-            
-            input_dict = {
-                Columns.OBS: torch.from_numpy(obs_processed).unsqueeze(0),
-            }
-            
-            rl_module_out = rl_module.forward_inference(input_dict)
-            logits = convert_to_numpy(rl_module_out[Columns.ACTION_DIST_INPUTS])
-            
-            observer_action = int(np.argmax(logits))
+            global RL_CASE
+            if RL_CASE == 'one_step':
+                obs_processed = preprocess_obs_for_rl_policy(
+                    belief_update_observer=observer_agent,
+                    obs=observation[0],
+                    behavior_type=hidden_cost_type,
+                )
+                
+                # * temp save the processed obs
+                # vis_img = ((obs_processed + 1.0) * 128.0).astype(np.uint8)
+                # vis_img = np.clip(vis_img, 0, 255)
+                # # save vis_img
+                # save_dir = os.path.join(os.environ['PYTHONPATH'], 'rl_demo_observer_obs')
+                # os.makedirs(save_dir, exist_ok=True)
+                # img_pil = Image.fromarray(vis_img)
+                # img_pil.save(os.path.join(save_dir, f'step_{step+1}_belief_new.png'))
+                # * --- end of temp save ---
+                
+                input_dict = {
+                    Columns.OBS: torch.from_numpy(obs_processed).to('cuda').unsqueeze(0),
+                }
+                
+                rl_module_out = rl_module.forward_inference(input_dict)
+                logits = convert_to_numpy(rl_module_out[Columns.ACTION_DIST_INPUTS])
+                
+                observer_action = int(np.argmax(logits))
             
             # print(f"      Step {step}: Observer action {observer_action}, Target action {target_actions[step]}, logits {logits}")
             
+            # case two: iterate over all behavior types and average the action logits and then pick 
+            elif RL_CASE == 'iterate':
+                obs_processed_lst = [preprocess_obs_for_rl_policy(
+                        belief_update_observer=observer_agent,
+                        obs=observation[0],
+                        behavior_type=i,
+                    ) for i in range(4)]
+                input_dict = {
+                    Columns.OBS: torch.from_numpy(np.stack(obs_processed_lst, axis=0)).to('cuda'),
+                }
+                rl_module_out = rl_module.forward_inference(input_dict)
+                logits = convert_to_numpy(rl_module_out[Columns.ACTION_DIST_INPUTS]) # shape (4, num_actions)
+                avg_logits = np.mean(logits, axis=0)  # shape (num_actions,)
+                # randomly sample action 
+                observer_action = int(np.random.choice(len(avg_logits), p=softmax(torch.from_numpy(avg_logits), dim=-1).numpy()))
+                
             # ! ---- End RL Policy Action Selection ---- !
 
             
