@@ -202,6 +202,11 @@ class SmartBufferObserverEnv(gym.Env):
         self.buffer_capacity = buffer_config.get("capacity_per_task", 500)
         self.buffer_sample_ratio = buffer_config.get("sample_ratio", 0.3)  # 30% from buffer, 70% fresh
         
+        # Scenario persistence configuration for stable learning
+        self.scenario_persistence_enabled = config.get("scenario_persistence", True)
+        self.min_success_rate = config.get("min_success_rate_to_switch", 0.7)  # Success rate before switching scenarios
+        self.min_episodes_per_scenario = config.get("min_episodes_per_scenario", 20)  # Minimum episodes before considering switch
+        
         # Initialize smart buffer
         if self.use_buffer:
             # Get curriculum configuration
@@ -257,6 +262,13 @@ class SmartBufferObserverEnv(gym.Env):
         self._truncated = False
         self._step_idx = 0
         self.current_task_id = None
+        self._at_least_once_see_in_view = False  # Track visibility state
+        
+        # Scenario persistence tracking
+        self.current_scenario = None
+        self.current_scenario_episodes = 0
+        self.current_scenario_successes = 0
+        self.scenario_success_history = deque(maxlen=50)  # Track recent success for current scenario
 
     def _get_task_id(self, scenario) -> int:
         """Extract curriculum task ID from scenario based on size and initial_distance."""
@@ -274,8 +286,48 @@ class SmartBufferObserverEnv(gym.Env):
                               key=lambda x: abs(x[0] - size) + abs(x[1] - initial_distance))
             return self.experience_buffer.level_to_id[closest_level]
     
+    def _should_switch_scenario(self):
+        """Determine if we should switch to a new scenario based on success rate."""
+        if not self.scenario_persistence_enabled:
+            return True  # Always switch if persistence is disabled
+            
+        if self.current_scenario is None:
+            return True  # First scenario selection
+        
+        # Need minimum episodes before considering switch
+        if self.current_scenario_episodes < self.min_episodes_per_scenario:
+            return False
+        
+        # Calculate success rate for current scenario
+        if len(self.scenario_success_history) < 5:  # Need some history
+            return False
+            
+        recent_success_rate = sum(self.scenario_success_history) / len(self.scenario_success_history)
+        
+        # Switch if we've achieved good success rate
+        if recent_success_rate >= self.min_success_rate:
+            print(f"🎯 Scenario mastered! Success rate: {recent_success_rate:.2f} >= {self.min_success_rate}")
+            return True
+            
+        return False
+    
     def _select_scenario(self):
-        """Smart scenario selection with curriculum learning."""
+        """Smart scenario selection with curriculum learning and persistence."""
+        # Check if we should stick with current scenario
+        if not self._should_switch_scenario():
+            if len(self.scenario_success_history) > 0:
+                print(f"📚 Continuing with current scenario (episodes: {self.current_scenario_episodes}, "
+                  f"success rate: {sum(self.scenario_success_history) / len(self.scenario_success_history):.2f})")
+            else:
+                print(f"📚 Continuing with current scenario (episodes: {self.current_scenario_episodes}, "
+                  f"success rate: N/A)")
+            return self.current_scenario
+        
+        # Reset scenario tracking for new scenario
+        self.current_scenario_episodes = 0
+        self.current_scenario_successes = 0
+        self.scenario_success_history.clear()
+        
         if self.use_buffer and hasattr(self, 'experience_buffer'):
             # Check if we should advance curriculum
             if self.experience_buffer.should_advance_curriculum():
@@ -296,14 +348,16 @@ class SmartBufferObserverEnv(gym.Env):
                 if valid_scenarios:
                     # Sample from valid scenarios
                     selected_scenario = valid_scenarios[np.random.randint(len(valid_scenarios))]
-                    print(f"Selected curriculum scenario: size={selected_scenario['size']}, "
+                    self.current_scenario = selected_scenario
+                    print(f"🔄 New curriculum scenario: size={selected_scenario['size']}, "
                           f"initial_distance={selected_scenario['initial_distance']}")
                     return selected_scenario
         
         # Fallback to random selection if buffer not available or no valid scenarios
         idx = np.random.randint(len(self.scenarios))
         scenario = self.scenarios.iloc[idx]
-        print(f"Selected random scenario: size={scenario['size']}, "
+        self.current_scenario = scenario
+        print(f"🔄 New random scenario: size={scenario['size']}, "
               f"initial_distance={scenario['initial_distance']}")
         return scenario
 
@@ -331,6 +385,10 @@ class SmartBufferObserverEnv(gym.Env):
         self._step_idx = 0
         self.current_episode_buffer = []
         self._last_episode_success = False  # Track success for curriculum
+        
+        # Track scenario persistence
+        if self.scenario_persistence_enabled:
+            self.current_scenario_episodes += 1
         
         # Smart scenario selection
         scenario = self._select_scenario()
@@ -426,8 +484,15 @@ class SmartBufferObserverEnv(gym.Env):
             if goal_max == self.env.goal:
                 r_t += 5.0 # one-off reward for correct goal identification
             # Episode is successful if goal was correctly identified
-            self._last_episode_success = (goal_max == self.env.goal)  # Substantial reward indicates success
+            episode_success = (goal_max == self.env.goal)
+            self._last_episode_success = episode_success
             self._at_least_once_see_in_view = False
+            
+            # Track success for scenario persistence
+            if self.scenario_persistence_enabled:
+                self.scenario_success_history.append(episode_success)
+                if episode_success:
+                    self.current_scenario_successes += 1
 
         # Store experience in episode buffer
         if self.use_buffer:
@@ -471,5 +536,24 @@ class SmartBufferObserverEnv(gym.Env):
                 'should_advance': self.experience_buffer.should_advance_curriculum()
             }
         return {}
+    
+    def get_scenario_persistence_info(self):
+        """Get current scenario persistence information."""
+        if not self.scenario_persistence_enabled:
+            return {'enabled': False}
+        
+        current_success_rate = 0.0
+        if len(self.scenario_success_history) > 0:
+            current_success_rate = sum(self.scenario_success_history) / len(self.scenario_success_history)
+        
+        return {
+            'enabled': True,
+            'current_scenario_episodes': self.current_scenario_episodes,
+            'current_scenario_successes': self.current_scenario_successes,
+            'success_rate': current_success_rate,
+            'min_success_rate': self.min_success_rate,
+            'min_episodes': self.min_episodes_per_scenario,
+            'ready_to_switch': self._should_switch_scenario()
+        }
     
 
