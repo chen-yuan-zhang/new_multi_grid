@@ -268,8 +268,8 @@ class SmartBufferObserverEnv(gym.Env):
         self.current_scenario = None
         self.current_scenario_episodes = 0
         self.current_scenario_successes = 0
-        self.scenario_success_history = deque(maxlen=50)  # Track recent success for current scenario
-
+        self.scenario_success_history = deque(maxlen=25)  # Track recent success for current scenario
+c
     def _get_task_id(self, scenario) -> int:
         """Extract curriculum task ID from scenario based on size and initial_distance."""
         size = int(scenario["size"])
