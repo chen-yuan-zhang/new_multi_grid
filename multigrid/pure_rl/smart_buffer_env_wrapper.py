@@ -400,6 +400,7 @@ class SmartBufferObserverEnv(gym.Env):
         log_belief_sum = (log_belief_sum - np.min(log_belief_sum)) / (np.max(log_belief_sum) - np.min(log_belief_sum) + 1e-10)
         
         # Calculate reward
+        goal_max = -1
         if "target_pos" in next_obs[0] or self.belief_observer.pos == self.env.target.pos:
             if not self._at_least_once_see_in_view:
                 self._at_least_once_see_in_view = True
@@ -423,7 +424,7 @@ class SmartBufferObserverEnv(gym.Env):
         # Track episode success for curriculum learning
         if termination:
             # Episode is successful if goal was correctly identified
-            self._last_episode_success = (goal_max == self.env.goal and r_t > 2.0)  # Substantial reward indicates success
+            self._last_episode_success = (goal_max == self.env.goal and r_t > 3.35)  # Substantial reward indicates success
             self._at_least_once_see_in_view = False
 
         # Store experience in episode buffer
