@@ -21,6 +21,8 @@ CP_THRESHOLD = 0.929 # this is calculated in /home/sukai/Project/chenyuan_projec
 
 # Behavior type indices (extend if more behaviors are needed)
 BEHAVIOR_TYPES = [0, 1, 2, 3]
+DROP_PREDICTION_DUE_TO_LOW_THRESHOLD_COUNT = 0
+PREDICTION_COUNT = 0
 
 class BeliefUpdateObserver(BaseAgent):
     def __init__(self, env, init_actor_belief = None, init_goal_belief = None, use_neural_predictor = False, use_log_space = True, use_neural_when_in_view_only = False, use_neural_when_cp_threshold = True):
@@ -267,6 +269,7 @@ class BeliefUpdateObserver(BaseAgent):
                 formatted_successors.append((action, ((next_pos[0], next_pos[1]), next_dir)))
             # Uncomment the following line when neural predictor is available
             tran_probs = self.neuro_predict(self.env, goal, behavior_idx, formatted_successors, pos_state)
+            PREDICTION_COUNT += 1
             # handle the case where use neural_when_cp_threshold is True
             if use_neural_when_cp_threshold:
                 # check the max prob of tran_probs
@@ -274,6 +277,9 @@ class BeliefUpdateObserver(BaseAgent):
                 if max_prob < cp_threshold:
                     # if max prob < threshold, use symbolic model
                     use_neural = False
+                    DROP_PREDICTION_DUE_TO_LOW_THRESHOLD_COUNT += 1
+                    if DROP_PREDICTION_DUE_TO_LOW_THRESHOLD_COUNT % 100 == 0:
+                        print(f"Dropping neural prediction due to low confidence: {DROP_PREDICTION_DUE_TO_LOW_THRESHOLD_COUNT} times out of {PREDICTION_COUNT} predictions.")
             
         
         if not use_neural:
