@@ -215,3 +215,11 @@ if __name__ == "__main__":
     args = parser.parse_args()
     
     main(dataset_path=args.dataset, verbose=args.verbose)
+    
+    
+# 🔍 Scenario 1500/1500 [neuro_predict] Called 21300 times. Time for last 50 calls: 11.27s
+#  | Style '0': 0.8673 | Style '1': 0.8629 | Style '3': 0.8614 | Style '2': 0.8800============================
+
+# ✅ Evaluation complete!
+#    Average Correctness: 0.8800
+#    Total Time: 3881.10 seconds

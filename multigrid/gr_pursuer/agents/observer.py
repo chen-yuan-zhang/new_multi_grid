@@ -17,12 +17,13 @@ from time import sleep
 # from .neuro_predictor import neuro_predict
 
 BETA = 1
+CP_THRESHOLD = 0.929 # this is calculated in /home/sukai/Project/chenyuan_project/eval.ipynb
 
 # Behavior type indices (extend if more behaviors are needed)
 BEHAVIOR_TYPES = [0, 1, 2, 3]
 
 class BeliefUpdateObserver(BaseAgent):
-    def __init__(self, env, init_actor_belief = None, init_goal_belief = None, use_neural_predictor = False, use_log_space = True, use_neural_when_in_view_only = False):
+    def __init__(self, env, init_actor_belief = None, init_goal_belief = None, use_neural_predictor = False, use_log_space = True, use_neural_when_in_view_only = False, use_neural_when_cp_threshold = True):
         # For Sukai: set use_neural_predictor = True to use neural predictor
         
         super().__init__(env.observer)
@@ -43,6 +44,8 @@ class BeliefUpdateObserver(BaseAgent):
         self.dir = env.observer.dir
         self.use_neural_predictor = use_neural_predictor
         self.use_neural_when_in_view_only = use_neural_when_in_view_only
+        self.use_neural_when_cp_threshold = use_neural_when_cp_threshold
+        self.cp_threshold = CP_THRESHOLD
         self.use_log_space = use_log_space
 
         if init_goal_belief:
@@ -217,7 +220,7 @@ class BeliefUpdateObserver(BaseAgent):
 
         return adjusted_dist_matrix
     
-    def get_cached_transition_probs(self, pos_state, goal, behavior_idx, successors, beta=BETA, use_neural=False, use_neural_when_in_view_only=False, target_visible=False):
+    def get_cached_transition_probs(self, pos_state, goal, behavior_idx, successors, beta=BETA, use_neural=False, use_neural_when_in_view_only=False, target_visible=False, use_neural_when_cp_threshold=False, cp_threshold=CP_THRESHOLD):
         """
         Get transition probabilities with caching to avoid redundant calculations.
         
@@ -264,6 +267,13 @@ class BeliefUpdateObserver(BaseAgent):
                 formatted_successors.append((action, ((next_pos[0], next_pos[1]), next_dir)))
             # Uncomment the following line when neural predictor is available
             tran_probs = self.neuro_predict(self.env, goal, behavior_idx, formatted_successors, pos_state)
+            # handle the case where use neural_when_cp_threshold is True
+            if use_neural_when_cp_threshold:
+                # check the max prob of tran_probs
+                max_prob = max(tran_probs.values()) if tran_probs else 0.0
+                if max_prob < cp_threshold:
+                    # if max prob < threshold, use symbolic model
+                    use_neural = False
             
         
         if not use_neural:
@@ -359,7 +369,7 @@ class BeliefUpdateObserver(BaseAgent):
                         successors = list(filter(lambda x: x[0] == Action.stay, successors))
 
                     # Get cached transition probabilities (already normalized)
-                    tran_probs = self.get_cached_transition_probs(pos_state, goal, behavior_idx, successors, beta, self.use_neural_predictor, self.use_neural_when_in_view_only, target_visible)
+                    tran_probs = self.get_cached_transition_probs(pos_state, goal, behavior_idx, successors, beta, self.use_neural_predictor, self.use_neural_when_in_view_only, target_visible, self.use_neural_when_cp_threshold, self.cp_threshold)
                     
                     # Verify transition probabilities sum to ~1 (sanity check)
                     total_prob = sum(tran_probs.values())

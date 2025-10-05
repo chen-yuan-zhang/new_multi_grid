@@ -544,7 +544,8 @@ def main(dataset_path: Optional[str] = None, verbose: bool = False) -> None:
         print(combined_summary)
     
     # Add results to dataframe for final save
-    final_output_file = f"rl_only_evaluation_results_training.csv"
+    dataset_name = dataset_path.split("/")[-1].replace(".csv", "")
+    final_output_file = f"rl_only_evaluation_results_training_dataname_{dataset_name}.csv"
     scenarios_df.to_csv(final_output_file, index=False)
     print(f"\n💾 Results saved: {final_output_file}")
       
