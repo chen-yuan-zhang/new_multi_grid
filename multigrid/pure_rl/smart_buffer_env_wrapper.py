@@ -205,7 +205,7 @@ class SmartBufferObserverEnv(gym.Env):
         # Scenario persistence configuration for stable learning
         self.scenario_persistence_enabled = config.get("scenario_persistence", True)
         self.min_success_rate = config.get("min_success_rate_to_switch", 0.7)  # Success rate before switching scenarios
-        self.min_episodes_per_scenario = config.get("min_episodes_per_scenario", 20)  # Minimum episodes before considering switch
+        self.min_episodes_per_scenario = config.get("min_episodes_per_scenario", 8)  # Minimum episodes before considering switch
         
         # Initialize smart buffer
         if self.use_buffer:
@@ -266,6 +266,7 @@ class SmartBufferObserverEnv(gym.Env):
         
         # Scenario persistence tracking
         self.current_scenario = None
+        self.current_scenario_behavior_type = None
         self.current_scenario_episodes = 0
         self.current_scenario_successes = 0
         self.scenario_success_history = deque(maxlen=25)  # Track recent success for current scenario
@@ -367,6 +368,7 @@ class SmartBufferObserverEnv(gym.Env):
         idx = np.random.randint(len(self.scenarios))
         scenario = self.scenarios.iloc[idx]
         self.current_scenario = scenario
+        self.current_scenario_behavior_type = scenario.get("hidden_cost_type", None)
         print(f"🔄 New random scenario: size={scenario['size']}, "
               f"initial_distance={scenario['initial_distance']}")
         return scenario
@@ -434,7 +436,7 @@ class SmartBufferObserverEnv(gym.Env):
         _ = self.belief_observer.compute_action(obs[0], render_and_save=False, get_action=False)
         
         augmented_obs = self.belief_observer.augment_observation(obs)
-        belief_img, log_belief_sum = obs_to_belief_image_array(self.belief_observer, None, obs[0])
+        belief_img, log_belief_sum = obs_to_belief_image_array(self.belief_observer, None, obs[0], add_noise=False, behavior_type=self.current_scenario_behavior_type)
         belief_img = (belief_img.astype(np.float32) / 128.0) - 1.0
         log_belief_sum = (log_belief_sum - np.min(log_belief_sum)) / (np.max(log_belief_sum) - np.min(log_belief_sum) + 1e-10)
 
@@ -463,7 +465,7 @@ class SmartBufferObserverEnv(gym.Env):
         augmented_obs = self.belief_observer.augment_observation(next_obs)
         goal_belief = augmented_obs[0]['goal_belief']
         
-        belief_img, log_belief_sum = obs_to_belief_image_array(self.belief_observer, None, next_obs[0], add_noise=False)
+        belief_img, log_belief_sum = obs_to_belief_image_array(self.belief_observer, None, next_obs[0], add_noise=False, behavior_type=self.current_scenario_behavior_type)
         belief_img = (belief_img.astype(np.float32) / 128.0) - 1.0
         log_belief_sum = (log_belief_sum - np.min(log_belief_sum)) / (np.max(log_belief_sum) - np.min(log_belief_sum) + 1e-10)
         

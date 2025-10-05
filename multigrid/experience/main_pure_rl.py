@@ -57,6 +57,7 @@ def run_scenario(scenario_config: Dict[str, Any], verbose: bool = False) -> Tupl
     observer_dir = scenario_config['observer_dir']
     target_dir = scenario_config['target_dir']
     target_actions = scenario_config['target_actions']
+    hidden_cost_type = scenario_config['hidden_cost_type']
     
     if verbose:
         print(f"    🎯 Target goal: {goal}")
@@ -131,6 +132,7 @@ def run_scenario(scenario_config: Dict[str, Any], verbose: bool = False) -> Tupl
             obs_processed = preprocess_obs_for_rl_policy(
                 belief_update_observer=observer_agent,
                 obs=observation[0],
+                behavior_type=hidden_cost_type,
             )
             
             # * temp save the processed obs
@@ -328,6 +330,7 @@ def main(dataset_path: Optional[str] = None, verbose: bool = False) -> None:
                 'goals': eval(scenario_row['goals']),
                 'goal': eval(scenario_row['goal']),
                 'hidden_cost': np.array(json.loads(scenario_row['hidden_cost'])),
+                'hidden_cost_type': scenario_row.get('hidden_cost_style', None),
                 'observer_pos': eval(scenario_row['observer_pos']),
                 'target_pos': eval(scenario_row['target_pos']),
                 'observer_dir': scenario_row['observer_dir'],

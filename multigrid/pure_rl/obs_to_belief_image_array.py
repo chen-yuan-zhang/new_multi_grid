@@ -7,7 +7,7 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_agg import FigureCanvasAgg as FigureCanvas
 IMAGE_SIZE = 64
-def obs_to_belief_image_array(belief_update_observer, filename, obs, add_noise=True):
+def obs_to_belief_image_array(belief_update_observer, filename, obs, add_noise=False, behavior_type=None):
     """
     Render the environment and save the visualization as an image array.
     
@@ -44,9 +44,15 @@ def obs_to_belief_image_array(belief_update_observer, filename, obs, add_noise=T
     
     goal_colors = ['yellow', 'green', 'cyan', 'magenta', 'orange']
     goal_probs = [belief_update_observer.goal_belief[goal] for goal in belief_update_observer.goals]
-    goal_text = '\n'.join([f'Goal {i+1} ({goal_colors[i % len(goal_colors)]}): {prob:.2f}' 
+    goal_text = '  '.join([f'({goal_colors[i % len(goal_colors)]}): {prob:.1f}' 
                            for i, prob in enumerate(goal_probs)])
-    ax.set_title(goal_text)
+    # put a big behavior_type text to goal text
+    if behavior_type is not None:
+        goal_text = f'B {behavior_type}'
+        # make title larger so that it is readable in 64x64 image
+        ax.set_title(goal_text, fontsize=30)
+    else:
+        ax.set_title(goal_text)
     
     obstacles = np.where(belief_update_observer.env.base_grid != 0)
     ax.scatter(obstacles[0], obstacles[1], c='black', marker='s', label='Obstacle')
@@ -65,6 +71,9 @@ def obs_to_belief_image_array(belief_update_observer, filename, obs, add_noise=T
     ax.set_xticks([])
     ax.set_yticks([])
     # ax.legend(loc='upper right', fontsize='x-small')
+
+    
+        
 
     # Save to file if a filename is supplied
     if filename is not None:
@@ -90,7 +99,7 @@ def obs_to_belief_image_array(belief_update_observer, filename, obs, add_noise=T
     return img_resized, log_belief_sum
 
 
-def preprocess_obs_for_rl_policy(belief_update_observer, obs):
+def preprocess_obs_for_rl_policy(belief_update_observer, obs, behavior_type=None):
     """
     Preprocess the observation for RL policy input.
     
@@ -101,7 +110,7 @@ def preprocess_obs_for_rl_policy(belief_update_observer, obs):
     Returns:
     np.ndarray: Processed image array (H, W, 3).
     """
-    belief_img, _ = obs_to_belief_image_array(belief_update_observer, None, obs, add_noise=False)
+    belief_img, _ = obs_to_belief_image_array(belief_update_observer, None, obs, add_noise=False, behavior_type=behavior_type)
     belief_img = (belief_img.astype(np.float32) / 128.0) - 1.0
     
     return belief_img

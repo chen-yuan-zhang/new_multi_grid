@@ -13,6 +13,7 @@ from multigrid.pure_rl.obs_to_belief_image_array import obs_to_belief_image_arra
 # import gym action space Discrete
 import gymnasium.spaces as spaces
 from scipy.stats import entropy
+import cv2
 
 class ObserverEnvDirectRew(gym.Env):
     """
@@ -177,15 +178,16 @@ class ObserverEnvDirectRew(gym.Env):
         goal_belief = augmented_obs[0]['goal_belief']
         
         
-        belief_img, log_belief_sum = obs_to_belief_image_array(self.belief_observer, None, next_obs[0], add_noise=False)
-        
+        belief_img, log_belief_sum = obs_to_belief_image_array(self.belief_observer, "/home/sukaih/Extrastorage/new_multi_grid_new_rl/multigrid/pure_rl/debug_belief_img.png", next_obs[0], add_noise=False, behavior_type=0)
+        cvt_img = cv2.cvtColor(belief_img, cv2.COLOR_RGB2BGR)
+        cv2.imwrite("/home/sukaih/Extrastorage/new_multi_grid_new_rl/multigrid/pure_rl/debug_belief_img.png", cvt_img)
+
+
         belief_img = (belief_img.astype(np.float32) / 128.0) - 1.0
         
-       
         
         infos = {}
         
-
         # Custom reward for observer
         # r_t will be the neg entropy of log_belief_sum and neg entropy of goal_belief, that means, more concentrated belief, more reward
         # rl just reward when in view, otherwise 0 reward
