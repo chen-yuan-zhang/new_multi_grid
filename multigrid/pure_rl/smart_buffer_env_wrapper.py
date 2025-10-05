@@ -308,6 +308,11 @@ class SmartBufferObserverEnv(gym.Env):
         if recent_success_rate >= self.min_success_rate:
             print(f"🎯 Scenario mastered! Success rate: {recent_success_rate:.2f} >= {self.min_success_rate}")
             return True
+        
+        # special case, consider we can never win this scenario, so if we repeat it many times, we should switch
+        if self.current_scenario_episodes >= 50 and recent_success_rate < 0.01:
+            print(f"⚠️ Stuck on scenario. Switching after {self.current_scenario_episodes} episodes with success rate {recent_success_rate:.2f}")
+            return True
             
         return False
     
