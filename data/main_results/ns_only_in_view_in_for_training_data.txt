@@ -1,0 +1,68 @@
+📊 Evaluation Results:
+   Total scenarios: 1500
+   Successful: 1097
+   Success rate: 73.1%
+   Avg convergence step: 8.5
+   Total time: 30098.7s
+
+⏱️  Execution Time Per Scenario:
+   Average: 20.033s
+   Min: 0.097s
+   Max: 200.147s
+   Total evaluation time: 30048.9s
+
+💾 Cache Performance:
+   Avg hit rate: 53.4%
+   Total hits: 0
+   Total misses: 0
+
+👁️  Visibility Analysis:
+   Avg visibility ratio: 53.0%
+   Avg visibility changes: 2.1
+   Success cases visibility: 64.8%
+   Failed cases visibility: 20.7%
+   ✅ Higher visibility correlates with success
+
+📈 Results by Behavior Style:
+                  eval_success                eval_convergence_step
+                         count  sum      mean                  mean
+hidden_cost_style                                                  
+hate_edge                  369  273  0.739837                  6.51
+hate_wall                  395  295  0.746835                  6.16
+like_edge                  356  252  0.707865                  5.45
+like_wall                  380  277  0.728947                  5.68
+
+📊 Statistics by Grid Size:
+      total_scenarios successful_scenarios  ... avg_final_confidence  avg_max_confidence
+size                                        ...                                         
+10                446                  347  ...                0.801               0.810
+12                542                  389  ...                0.788               0.797
+15                512                  361  ...                0.790               0.797
+
+[3 rows x 10 columns]
+
+📏 Statistics by Initial Distance:
+                  total_scenarios  ... avg_max_confidence
+initial_distance                   ...                   
+3                             503  ...              0.849
+5                             490  ...              0.796
+7                             507  ...              0.758
+
+[3 rows x 10 columns]
+
+🎯 Combined Statistics by Grid Size and Initial Distance:
+                       scenarios successful  ... avg_visibility  avg_confidence
+size initial_distance                        ...                               
+10   3                       134        106  ...          0.691           0.808
+     5                       153        120  ...          0.556           0.812
+     7                       159        121  ...          0.461           0.785
+12   3                       172        136  ...          0.728           0.852
+     5                       184        132  ...          0.513           0.783
+     7                       186        121  ...          0.356           0.732
+15   3                       197        158  ...          0.711           0.851
+     5                       153        102  ...          0.434           0.766
+     7                       162        101  ...          0.315           0.737
+
+[9 rows x 7 columns]
+
+💾 Results saved: ns_only_in_view_evaluation_results_training_dataname_results_for_training_neuro_predictor_connected_only_sample_1500.csv
