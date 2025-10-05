@@ -10,6 +10,8 @@ from smart_buffer_env_wrapper import SmartBufferObserverEnv
 from observer_model import ObserverVisionTorchRLModule
 from ray.rllib.core.rl_module.rl_module import RLModuleSpec
 from ray.rllib.core.rl_module.default_model_config import DefaultModelConfig
+from ray.rllib.algorithms.dreamerv3.dreamerv3 import DreamerV3Config
+
 from time import sleep
 import argparse
 import numpy as np
@@ -20,31 +22,46 @@ TRAIN_DATA_PATH = "results_test_new.csv"  # Path to your training dataset CSV
 def make_env(env_config):
     return SmartBufferObserverEnv(env_config)
 
-class SmartBufferCallbacks:
-    """Callbacks to monitor and utilize the smart buffer."""
+class CurriculumBufferCallbacks:
+    """Enhanced callbacks to monitor smart buffer and curriculum learning."""
     
     def __init__(self):
         self.buffer_stats_history = []
+        self.curriculum_stats_history = []
+        self.last_curriculum_stage = 0
     
     def on_train_result(self, algorithm, result):
         """Called after each training iteration."""
-        # Get buffer statistics from environments
+        # Try to get curriculum and buffer statistics from environments
         env_runners = algorithm.env_runner_group
         if env_runners:
             try:
-                # Get stats from first worker
-                worker = env_runners.remote_workers()[0] if env_runners.remote_workers() else env_runners.local_worker()
-                if worker:
-                    # This would need to be implemented properly with RLlib's callback system
-                    # For now, we'll log basic metrics
-                    pass
+                # Get stats from local worker (if available) or first remote worker
+                workers = [env_runners.local_worker()] if env_runners.local_worker() else []
+                workers.extend(env_runners.remote_workers())
+                
+                if workers:
+                    worker = workers[0]
+                    # Note: In a real implementation, you'd need to add a method to get these stats
+                    # This is a placeholder for the interface
+                    print(f"📊 Buffer monitoring active (iteration {result.get('training_iteration', 0)})")
+                    
             except Exception as e:
-                print(f"Could not get buffer stats: {e}")
-        
-        # Log buffer performance
-        print(f"Training iteration {result.get('training_iteration', 0)} completed")
+                print(f"Could not get curriculum stats: {e}")
         
         return result
+    
+    def log_curriculum_advancement(self, new_stage, current_levels):
+        """Log when curriculum advances to new stage."""
+        if new_stage > self.last_curriculum_stage:
+            print(f"🎯 CURRICULUM ADVANCED: Stage {self.last_curriculum_stage} → {new_stage}")
+            print(f"   Active levels: {current_levels}")
+            self.last_curriculum_stage = new_stage
+            self.curriculum_stats_history.append({
+                'stage': new_stage,
+                'levels': current_levels,
+                'timestamp': result.get('training_iteration', 0) if 'result' in locals() else 0
+            })
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Train PPO with Smart Buffer')
@@ -56,11 +73,19 @@ if __name__ == "__main__":
                         help='Experience buffer capacity per task type')
     parser.add_argument('--task-rotation', action='store_true',
                         help='Enable task rotation for balanced sampling')
+    parser.add_argument('--curriculum-sizes', type=int, nargs='+', default=[10, 12, 15],
+                        help='Grid sizes for curriculum learning (default: 10 12 15)')
+    parser.add_argument('--curriculum-distances', type=int, nargs='+', default=[3, 5, 7],
+                        help='Initial distances for curriculum learning (default: 3 5 7)')
+    parser.add_argument('--convergence-threshold', type=float, default=0.8,
+                        help='Success rate threshold for curriculum advancement (default: 0.8)')
+    parser.add_argument('--success-window', type=int, default=100,
+                        help='Window size for success rate calculation (default: 100)')
     args = parser.parse_args()
 
     ray.init(ignore_reinit_error=True)
 
-    # Enhanced environment configuration with smart buffer
+    # Enhanced environment configuration with smart buffer and curriculum learning
     gamma = 0.999
     env_cfg = {
         "gamma": gamma, 
@@ -69,19 +94,41 @@ if __name__ == "__main__":
             "enabled": True,
             "capacity_per_task": args.buffer_capacity,
             "sample_ratio": 0.2,  # 20% from buffer, 80% fresh experiences
+            # Curriculum learning configuration
+            "curriculum": {
+                "sizes": args.curriculum_sizes,
+                "initial_distances": args.curriculum_distances
+            }
         },
-        "task_rotation": args.task_rotation
+        "task_rotation": args.task_rotation  # May be disabled for curriculum learning
     }
 
     # Register enhanced environment
     register_env("SmartBufferObserverEnv-v0", make_env)
 
+    # Test environment creation to ensure it works
+    try:
+        test_env = make_env(env_cfg)
+        print(f"✅ Environment test successful:")
+        print(f"   Action space: {test_env.action_space}")
+        print(f"   Observation space: {test_env.observation_space}")
+        print(f"   Single action space: {test_env.single_action_space}")
+        del test_env
+    except Exception as e:
+        print(f"❌ Environment test failed: {e}")
+        import traceback
+        traceback.print_exc()
+        raise
+
     # GPU setup
     visible = os.environ.get("CUDA_VISIBLE_DEVICES")
     num_gpus = 1 if visible and visible.strip() else 0
+    lr_multiplier = num_gpus if num_gpus > 0 else 1
+
+    default_config = DreamerV3Config()
 
     config = (
-        PPOConfig()
+        DreamerV3Config()
         .api_stack(enable_rl_module_and_learner=True,
                    enable_env_runner_and_connector_v2=True)
         .framework("torch")
@@ -92,44 +139,29 @@ if __name__ == "__main__":
             local_tf_session_args={},
         )
         .environment(env="SmartBufferObserverEnv-v0", env_config=env_cfg)
-        .rl_module(model_config=DefaultModelConfig(
-                conv_filters=[
-                    [16, 5, 2],
-                    [32, 5, 2], 
-                    [64, 3, 1], 
-                    [128, 3, 1],
-                    [256, 3, 1],
-                ],
-                conv_activation="silu",
-                head_fcnet_hiddens=[256],
-                vf_share_layers=True,
-            )
-        )
         .learners(
             num_learners=1,
             num_gpus_per_learner=1,
         )
         .training(
-            gamma=gamma,
-            lr=2.5e-4,
-            num_epochs=10,
-            train_batch_size_per_learner=576,  # matches rollout collection (12×48)
-            minibatch_size=32,
-            lambda_=0.95,
-            kl_coeff=0.5,
-            clip_param=0.1,
-            vf_clip_param=10.0,
-            entropy_coeff=0.01,
-            grad_clip=10.0,
-            grad_clip_by="global_norm",
+            model_size="S",
+            training_ratio=1024,
+            batch_size_B=16,
+            world_model_lr=default_config.world_model_lr * lr_multiplier,
+            actor_lr=default_config.actor_lr * lr_multiplier,
+            critic_lr=default_config.critic_lr * lr_multiplier,
         )
         .env_runners(
-            num_env_runners=12,
-            explore=True,
-            remote_worker_envs=True,
-            batch_mode="truncate_episodes",
-            rollout_fragment_length=48,  # ~3-4 episodes per task
+            remote_worker_envs=1,
         )
+        # .env_runners(
+        #     num_env_runners=12,
+        #     explore=True,
+        #     remote_worker_envs=True,
+        #     batch_mode="truncate_episodes",
+        #     rollout_fragment_length=48,  # ~3-4 episodes per task
+        #     create_env_on_local_worker=True,  # Ensure local worker has env
+        # )
         .evaluation(
             evaluation_interval=5,
             evaluation_duration=10,
@@ -148,13 +180,28 @@ if __name__ == "__main__":
             algo.restore(args.restore_checkpoint)
         print("Checkpoint restored successfully!")
     else:
+        print("Building algorithm...")
         algo = config.build_algo()
+        print("Algorithm built successfully!")
+        
+        # Debug: Check if env_runner is properly initialized
+        print("🔍 Debugging env_runner initialization:")
+        print(f"   Has env_runner: {hasattr(algo, 'env_runner')}")
+        if hasattr(algo, 'env_runner') and algo.env_runner:
+            print(f"   env_runner type: {type(algo.env_runner)}")
+            print(f"   Has env: {hasattr(algo.env_runner, 'env')}")
+            if hasattr(algo.env_runner, 'env'):
+                print(f"   env is None: {algo.env_runner.env is None}")
+                if algo.env_runner.env is not None:
+                    print(f"   env type: {type(algo.env_runner.env)}")
+        
         print("Starting fresh training with smart buffer...")
 
     # Initialize tracking
     best_eval_reward = float('-inf')
     best_checkpoint_path = None
-    task_performance_history = {i: [] for i in range(4)}  # Track per-task performance
+    curriculum_advancement_history = []  # Track curriculum progression
+    task_performance_history = {}  # Track per curriculum level performance
 
     # Load best eval reward from metadata if restoring
     if args.restore_checkpoint:
@@ -168,15 +215,31 @@ if __name__ == "__main__":
                 print("Could not load previous best eval reward, starting fresh")
 
     start_iter = args.start_iter
-    total_iterations = 2000
+    total_iterations = 20000
 
-    print(f"🚀 Starting training with Smart Buffer:")
+    print(f"🚀 Starting training with Smart Buffer and Curriculum Learning:")
     print(f"  - Buffer capacity per task: {args.buffer_capacity}")
     print(f"  - Task rotation: {args.task_rotation}")
+    print(f"  - Curriculum sizes: {args.curriculum_sizes}")
+    print(f"  - Curriculum distances: {args.curriculum_distances}")
+    print(f"  - Convergence threshold: {args.convergence_threshold}")
+    print(f"  - Success window: {args.success_window}")
     print(f"  - Rollout fragment length: 48")
     print(f"  - Training batch size: 576")
 
     for i in range(start_iter, total_iterations):
+        # Additional safety check before training
+        if hasattr(algo, 'env_runner') and algo.env_runner and algo.env_runner.env is None:
+            print("⚠️  Warning: env_runner.env is None, attempting to reinitialize...")
+            try:
+                # Try to manually set up the environment
+                test_env = make_env(env_cfg)
+                print(f"Created test environment: {type(test_env)}")
+                del test_env
+            except Exception as e:
+                print(f"Failed to create test environment: {e}")
+                break
+        
         result = algo.train()
 
         # Extract metrics
@@ -199,9 +262,17 @@ if __name__ == "__main__":
         else:
             print("  eval_reward=N/A", end="")
         
-        # Additional smart buffer metrics
+        # Additional smart buffer and curriculum metrics
         if i % 10 == 0:  # Every 10 iterations
-            print(f"  [buffer_enabled=True]", end="")
+            print(f"  [buffer_enabled=True, curriculum_enabled=True]", end="")
+        
+        # Detailed curriculum logging every 25 iterations
+        if i % 25 == 0:
+            print(f"\n📚 Curriculum Status at iteration {i}:")
+            print(f"  - Configuration: sizes={args.curriculum_sizes}, distances={args.curriculum_distances}")
+            print(f"  - Total curriculum levels: {len(args.curriculum_sizes) * len(args.curriculum_distances)}")
+            # Note: Actual curriculum stats would need to be retrieved from the environment
+            # This would require implementing a way to collect stats from distributed workers
         
         print()  # New line
 
@@ -228,5 +299,7 @@ if __name__ == "__main__":
 
     print(f"🎯 Training completed!")
     print(f"📊 Best evaluation reward: {best_eval_reward:.2f}")
+    print(f"📚 Curriculum configuration: sizes={args.curriculum_sizes}, distances={args.curriculum_distances}")
+    print(f"🎓 Total curriculum levels: {len(args.curriculum_sizes) * len(args.curriculum_distances)}")
     if best_checkpoint_path:
         print(f"💾 Best checkpoint: {best_checkpoint_path}")

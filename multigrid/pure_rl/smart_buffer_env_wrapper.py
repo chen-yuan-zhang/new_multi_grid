@@ -5,7 +5,7 @@ from gymnasium import spaces
 from collections import deque, defaultdict
 import pandas as pd
 import json
-from typing import Dict, List, Tuple, Any
+from typing import Dict, List, Tuple, Any, Optional
 from multigrid.core.actions import Action
 from multigrid.envs.goal_prediction import AGREnv
 from multigrid.gr_pursuer.agents.observer import BeliefUpdateObserver
@@ -13,42 +13,119 @@ from multigrid.pure_rl.obs_to_belief_image_array import obs_to_belief_image_arra
 import random
 
 
-class TaskAwareExperienceBuffer:
+class CurriculumAwareExperienceBuffer:
     """
-    Smart buffer that maintains balanced experiences across different task types.
+    Smart buffer that maintains balanced experiences across different curriculum levels.
+    Supports curriculum learning based on scenario size and initial distance.
     """
     
-    def __init__(self, capacity_per_task: int = 1000, num_task_types: int = 4):
+    def __init__(self, capacity_per_task: int = 1000, sizes: Optional[List[int]] = None, initial_distances: Optional[List[int]] = None):
         self.capacity_per_task = capacity_per_task
-        self.num_task_types = num_task_types
+        self.sizes = sizes if sizes is not None else [10, 12, 15]
+        self.initial_distances = initial_distances if initial_distances is not None else [3, 5, 7]
         
-        # Separate buffers for each task type
+        # Create curriculum levels from combinations of size and distance
+        self.curriculum_levels = []
+        self.level_to_id = {}
+        level_id = 0
+        
+        for size in self.sizes:
+            for distance in self.initial_distances:
+                level = (size, distance)
+                self.curriculum_levels.append(level)
+                self.level_to_id[level] = level_id
+                level_id += 1
+        
+        self.num_task_types = len(self.curriculum_levels)
+        
+        # Separate buffers for each curriculum level
         self.task_buffers = {
-            task_id: deque(maxlen=capacity_per_task) 
-            for task_id in range(num_task_types)
+            level_id: deque(maxlen=capacity_per_task) 
+            for level_id in range(self.num_task_types)
         }
+        
+        # Curriculum progression tracking
+        self.current_curriculum_stage = 0  # Start with easiest tasks
+        self.convergence_threshold = 0.8  # Threshold for moving to next stage
+        self.episode_success_rates = defaultdict(deque)  # Track recent success rates
+        self.success_window_size = 100  # Number of episodes to consider for convergence
         
         # Track task statistics
         self.task_counts = defaultdict(int)
         self.task_episode_lengths = defaultdict(list)
         
-    def add_episode(self, episode_data: List[Dict], task_id: int):
-        """Add a complete episode to the appropriate task buffer."""
+        
+    def add_episode(self, episode_data: List[Dict], task_id: int, success: bool = False):
+        """Add a complete episode to the appropriate curriculum level buffer."""
         self.task_buffers[task_id].append(episode_data)
         self.task_counts[task_id] += 1
         self.task_episode_lengths[task_id].append(len(episode_data))
         
+        # Track success rate for curriculum progression
+        if len(self.episode_success_rates[task_id]) >= self.success_window_size:
+            self.episode_success_rates[task_id].popleft()
+        self.episode_success_rates[task_id].append(success)
+        
+    def get_curriculum_difficulty(self, size: int, distance: int) -> float:
+        """Calculate difficulty score for a curriculum level (lower = easier)."""
+        # Normalize both dimensions and combine them
+        size_difficulty = (size - min(self.sizes)) / (max(self.sizes) - min(self.sizes)) if len(set(self.sizes)) > 1 else 0
+        distance_difficulty = (distance - min(self.initial_distances)) / (max(self.initial_distances) - min(self.initial_distances)) if len(set(self.initial_distances)) > 1 else 0
+        return size_difficulty + distance_difficulty
+    
+    def get_current_curriculum_levels(self) -> List[Tuple[int, int]]:
+        """Get the curriculum levels that should be trained on currently."""
+        # Sort curriculum levels by difficulty
+        sorted_levels = sorted(self.curriculum_levels, key=lambda x: self.get_curriculum_difficulty(x[0], x[1]))
+        
+        # Determine how many levels to include based on current stage
+        max_stage = min(self.current_curriculum_stage + 1, len(sorted_levels))
+        return sorted_levels[:max_stage]
+    
+    def should_advance_curriculum(self) -> bool:
+        """Check if we should advance to the next curriculum stage."""
+        current_levels = self.get_current_curriculum_levels()
+        
+        # Check if all current levels have sufficient success rate
+        for level in current_levels:
+            level_id = self.level_to_id[level]
+            if level_id not in self.episode_success_rates:
+                return False
+            
+            success_rates = list(self.episode_success_rates[level_id])
+            if len(success_rates) < self.success_window_size:
+                return False
+                
+            recent_success_rate = sum(success_rates) / len(success_rates)
+            if recent_success_rate < self.convergence_threshold:
+                return False
+        
+        return True
+    
+    def advance_curriculum(self):
+        """Advance to the next curriculum stage."""
+        if self.current_curriculum_stage < len(self.curriculum_levels) - 1:
+            self.current_curriculum_stage += 1
+            print(f"Advanced curriculum to stage {self.current_curriculum_stage}")
+            print(f"Current levels: {self.get_current_curriculum_levels()}")
+        
     def sample_balanced_batch(self, batch_size: int) -> List[Dict]:
-        """Sample a balanced batch ensuring representation from all task types."""
-        samples_per_task = batch_size // self.num_task_types
-        remainder = batch_size % self.num_task_types
+        """Sample a balanced batch from current curriculum levels."""
+        current_levels = self.get_current_curriculum_levels()
+        current_level_ids = [self.level_to_id[level] for level in current_levels]
+        
+        # Filter to only include levels with data
+        available_level_ids = [lid for lid in current_level_ids if len(self.task_buffers[lid]) > 0]
+        
+        if not available_level_ids:
+            return []
+            
+        samples_per_task = batch_size // len(available_level_ids)
+        remainder = batch_size % len(available_level_ids)
         
         batch = []
         
-        for task_id in range(self.num_task_types):
-            if len(self.task_buffers[task_id]) == 0:
-                continue
-                
+        for level_id in available_level_ids:
             # Base samples per task
             n_samples = samples_per_task
             
@@ -57,8 +134,8 @@ class TaskAwareExperienceBuffer:
                 n_samples += 1
                 remainder -= 1
             
-            # Sample episodes from this task type
-            available_episodes = list(self.task_buffers[task_id])
+            # Sample episodes from this curriculum level
+            available_episodes = list(self.task_buffers[level_id])
             
             transitions_collected = 0
             while transitions_collected < n_samples and available_episodes:
@@ -75,13 +152,23 @@ class TaskAwareExperienceBuffer:
     
     def get_statistics(self) -> Dict:
         """Get buffer statistics for monitoring."""
+        current_levels = self.get_current_curriculum_levels()
+        current_level_ids = [self.level_to_id[level] for level in current_levels]
+        
         stats = {
+            'curriculum_stage': self.current_curriculum_stage,
+            'current_levels': current_levels,
             'task_counts': dict(self.task_counts),
-            'buffer_sizes': {task_id: len(buffer) for task_id, buffer in self.task_buffers.items()},
+            'buffer_sizes': {level_id: len(buffer) for level_id, buffer in self.task_buffers.items()},
             'avg_episode_lengths': {
-                task_id: np.mean(lengths) if lengths else 0 
-                for task_id, lengths in self.task_episode_lengths.items()
-            }
+                level_id: np.mean(lengths) if lengths else 0 
+                for level_id, lengths in self.task_episode_lengths.items()
+            },
+            'success_rates': {
+                level_id: np.mean(list(success_rates)) if success_rates else 0
+                for level_id, success_rates in self.episode_success_rates.items()
+            },
+            'should_advance': self.should_advance_curriculum()
         }
         return stats
 
@@ -95,6 +182,9 @@ class SmartBufferObserverEnv(gym.Env):
     def __init__(self, config=None):
         super().__init__()
         config = config or {}
+        
+        # Initialize render mode before other components
+        self.render_mode = config.get("render_mode", None)
         
         # Initialize base environment components
         self.gamma = float(config.get("gamma", 0.995))
@@ -114,9 +204,15 @@ class SmartBufferObserverEnv(gym.Env):
         
         # Initialize smart buffer
         if self.use_buffer:
-            self.experience_buffer = TaskAwareExperienceBuffer(
+            # Get curriculum configuration
+            curriculum_config = buffer_config.get("curriculum", {})
+            sizes = curriculum_config.get("sizes", [10, 12, 15])
+            initial_distances = curriculum_config.get("initial_distances", [3, 5, 7])
+            
+            self.experience_buffer = CurriculumAwareExperienceBuffer(
                 capacity_per_task=self.buffer_capacity,
-                num_task_types=4  # Based on hidden_cost_type: 0,1,2,3
+                sizes=sizes,
+                initial_distances=initial_distances
             )
             self.current_episode_buffer = []
         
@@ -147,7 +243,9 @@ class SmartBufferObserverEnv(gym.Env):
         )
         
         self.action_space = spaces.Discrete(4)
-        self.observation_space = spaces.Box(low=-1.0, high=1.0, shape=(124, 124, 3), dtype=np.float32)
+        self.observation_space = spaces.Box(low=-1.0, high=1.0, shape=(64, 64, 3), dtype=np.float32)
+        self.single_action_space = self.action_space 
+
         
         del probe_env
         
@@ -161,26 +259,53 @@ class SmartBufferObserverEnv(gym.Env):
         self.current_task_id = None
 
     def _get_task_id(self, scenario) -> int:
-        """Extract task ID from scenario for smart buffering."""
-        return int(scenario["hidden_cost_type"])
+        """Extract curriculum task ID from scenario based on size and initial_distance."""
+        size = int(scenario["size"])
+        initial_distance = int(scenario["initial_distance"])
+        
+        # Find the corresponding curriculum level
+        level = (size, initial_distance)
+        if level in self.experience_buffer.level_to_id:
+            return self.experience_buffer.level_to_id[level]
+        else:
+            # If not found, use the closest level (fallback)
+            print(f"Warning: Curriculum level {level} not found, using closest match")
+            closest_level = min(self.experience_buffer.curriculum_levels, 
+                              key=lambda x: abs(x[0] - size) + abs(x[1] - initial_distance))
+            return self.experience_buffer.level_to_id[closest_level]
     
     def _select_scenario(self):
-        """Smart scenario selection with task balancing."""
-        if self.task_rotation_enabled:
-            # Rotate through task types to ensure balance
-            task_types = [0, 1, 2, 3]
-            target_task_type = task_types[self.task_counter % len(task_types)]
+        """Smart scenario selection with curriculum learning."""
+        if self.use_buffer and hasattr(self, 'experience_buffer'):
+            # Check if we should advance curriculum
+            if self.experience_buffer.should_advance_curriculum():
+                self.experience_buffer.advance_curriculum()
             
-            # Find scenarios of target task type
-            task_scenarios = self.scenarios[self.scenarios['hidden_cost_type'] == target_task_type]
-            if len(task_scenarios) > 0:
-                scenario = task_scenarios.sample(n=1).iloc[0]
-                self.task_counter += 1
-                return scenario
+            # Get current curriculum levels
+            current_levels = self.experience_buffer.get_current_curriculum_levels()
+            
+            # Filter scenarios to only include current curriculum levels
+            if current_levels:
+                valid_scenarios = []
+                for _, scenario in self.scenarios.iterrows():
+                    size = int(scenario["size"])
+                    initial_distance = int(scenario["initial_distance"])
+                    if (size, initial_distance) in current_levels:
+                        valid_scenarios.append(scenario)
+                
+                if valid_scenarios:
+                    # Sample from valid scenarios
+                    selected_scenario = valid_scenarios[np.random.randint(len(valid_scenarios))]
+                    print(f"Selected curriculum scenario: size={selected_scenario['size']}, "
+                          f"initial_distance={selected_scenario['initial_distance']}")
+                    return selected_scenario
         
-        # Fallback to random selection
+        # Fallback to random selection if buffer not available or no valid scenarios
         idx = np.random.randint(len(self.scenarios))
-        return self.scenarios.iloc[idx]
+        scenario = self.scenarios.iloc[idx]
+        print(f"Selected random scenario: size={scenario['size']}, "
+              f"initial_distance={scenario['initial_distance']}")
+        return scenario
 
     def _next_target_action(self):
         return self._target_actions[self._step_idx] if self._step_idx < len(self._target_actions) else self._target_actions[-1]
@@ -192,12 +317,20 @@ class SmartBufferObserverEnv(gym.Env):
         # Store previous episode in buffer if it exists
         if (self.use_buffer and hasattr(self, 'current_episode_buffer') and 
             len(self.current_episode_buffer) > 0 and self.current_task_id is not None):
-            self.experience_buffer.add_episode(self.current_episode_buffer, self.current_task_id)
+            
+            # Calculate episode success based on whether goal was achieved
+            episode_success = getattr(self, '_last_episode_success', False)
+            self.experience_buffer.add_episode(
+                self.current_episode_buffer, 
+                self.current_task_id,
+                success=episode_success
+            )
         
         # Reset episode state
         self._terminated = self._truncated = False
         self._step_idx = 0
         self.current_episode_buffer = []
+        self._last_episode_success = False  # Track success for curriculum
         
         # Smart scenario selection
         scenario = self._select_scenario()
@@ -245,6 +378,7 @@ class SmartBufferObserverEnv(gym.Env):
                 'step': self._step_idx
             }
             self.current_episode_buffer.append(initial_experience)
+        self._at_least_once_see_in_view = False
 
         return belief_img, info
 
@@ -261,22 +395,36 @@ class SmartBufferObserverEnv(gym.Env):
         augmented_obs = self.belief_observer.augment_observation(next_obs)
         goal_belief = augmented_obs[0]['goal_belief']
         
-        belief_img, log_belief_sum = obs_to_belief_image_array(self.belief_observer, None, next_obs[0], add_noise=True)
+        belief_img, log_belief_sum = obs_to_belief_image_array(self.belief_observer, None, next_obs[0], add_noise=False)
         belief_img = (belief_img.astype(np.float32) / 128.0) - 1.0
         log_belief_sum = (log_belief_sum - np.min(log_belief_sum)) / (np.max(log_belief_sum) - np.min(log_belief_sum) + 1e-10)
         
         # Calculate reward
         if "target_pos" in next_obs[0] or self.belief_observer.pos == self.env.target.pos:
+            if not self._at_least_once_see_in_view:
+                self._at_least_once_see_in_view = True
             r_t = 1.0
-            goal_max = max(goal_belief.items(), key=lambda x: x[1])[0]
-            if goal_max == self.env.goal:
-                r_t += 1.0
         else:
             r_t = 0.0
+        if self._at_least_once_see_in_view:
+            goal_max = max(goal_belief.items(), key=lambda x: x[1])[0]
+            if goal_max == self.env.goal:
+                r_t += 3.0
+
+            # auxiliary rewards -> when agent is confident, also reward
+            goal_prob_max = max(goal_belief.values())
+            goal_prob_rew = (goal_prob_max - (1/len(goal_belief))) * 0.6  # scaled auxiliary reward
+            r_t += goal_prob_rew
 
         termination = truncation = self.env.unwrapped.is_done()
         self._terminated = termination
         self._truncated = truncation
+        
+        # Track episode success for curriculum learning
+        if termination:
+            # Episode is successful if goal was correctly identified
+            self._last_episode_success = (goal_max == self.env.goal and r_t > 2.0)  # Substantial reward indicates success
+            self._at_least_once_see_in_view = False
 
         # Store experience in episode buffer
         if self.use_buffer:
@@ -305,3 +453,20 @@ class SmartBufferObserverEnv(gym.Env):
         if not self.use_buffer or len(self.experience_buffer.task_buffers) == 0:
             return []
         return self.experience_buffer.sample_balanced_batch(batch_size)
+    
+    def advance_curriculum_stage(self):
+        """Manually advance curriculum stage."""
+        if self.use_buffer and hasattr(self, 'experience_buffer'):
+            self.experience_buffer.advance_curriculum()
+            
+    def get_current_curriculum_info(self):
+        """Get current curriculum information."""
+        if self.use_buffer and hasattr(self, 'experience_buffer'):
+            return {
+                'current_stage': self.experience_buffer.current_curriculum_stage,
+                'current_levels': self.experience_buffer.get_current_curriculum_levels(),
+                'should_advance': self.experience_buffer.should_advance_curriculum()
+            }
+        return {}
+    
+

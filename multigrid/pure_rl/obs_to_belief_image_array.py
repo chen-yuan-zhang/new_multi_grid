@@ -6,7 +6,7 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_agg import FigureCanvasAgg as FigureCanvas
-
+IMAGE_SIZE = 64
 def obs_to_belief_image_array(belief_update_observer, filename, obs, add_noise=True):
     """
     Render the environment and save the visualization as an image array.
@@ -83,7 +83,7 @@ def obs_to_belief_image_array(belief_update_observer, filename, obs, add_noise=T
         noise = np.random.normal(0, 10, image_array.shape).astype(np.uint8)
         image_array = cv2.addWeighted(image_array, 0.9, noise, 0.1, 0)
 
-    img_resized = cv2.resize(image_array, (124, 124), interpolation=cv2.INTER_AREA)
+    img_resized = cv2.resize(image_array, (IMAGE_SIZE, IMAGE_SIZE), interpolation=cv2.INTER_AREA)
     
     
     plt.close(fig)
