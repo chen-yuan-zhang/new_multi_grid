@@ -409,13 +409,13 @@ class SmartBufferObserverEnv(gym.Env):
             r_t = 0.0
         if self._at_least_once_see_in_view:
             goal_max = max(goal_belief.items(), key=lambda x: x[1])[0]
-            if goal_max == self.env.goal:
-                r_t += 3.0
 
             # auxiliary rewards -> when agent is confident, also reward
             goal_prob_max = max(goal_belief.values())
-            goal_prob_rew = (goal_prob_max - (1/len(goal_belief))) * 0.6  # scaled auxiliary reward
-            r_t += goal_prob_rew
+            if goal_prob_max > 0.66: 
+                if goal_max == self.env.goal:
+                    goal_prob_rew = goal_prob_max - (1/len(goal_belief))
+                    r_t += goal_prob_rew
 
         termination = truncation = self.env.unwrapped.is_done()
         self._terminated = termination
@@ -423,8 +423,10 @@ class SmartBufferObserverEnv(gym.Env):
         
         # Track episode success for curriculum learning
         if termination:
+            if goal_max == self.env.goal:
+                r_t += 5.0 # one-off reward for correct goal identification
             # Episode is successful if goal was correctly identified
-            self._last_episode_success = (goal_max == self.env.goal and r_t > 3.35)  # Substantial reward indicates success
+            self._last_episode_success = (goal_max == self.env.goal)  # Substantial reward indicates success
             self._at_least_once_see_in_view = False
 
         # Store experience in episode buffer

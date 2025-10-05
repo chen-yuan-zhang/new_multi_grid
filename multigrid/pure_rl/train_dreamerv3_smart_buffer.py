@@ -1,7 +1,6 @@
-# train_ppo_smart_buffer.py
+
 import torch
 import ray
-from ray.rllib.algorithms.ppo import PPOConfig
 from ray.tune.registry import register_env
 from ray.rllib.models import ModelCatalog
 from ray.rllib.core.learner.torch.torch_learner import TorchLearner
@@ -278,7 +277,7 @@ if __name__ == "__main__":
 
         # Save checkpoints
         if i % 50 == 0:
-            save_dir = os.path.join(os.environ['WORKING_DIR'], f"data/model_data/{TRAIN_DATA_PATH}/ppo_smart_buffer_checkpoints")
+            save_dir = os.path.join(os.environ['WORKING_DIR'], f"data/model_data/{TRAIN_DATA_PATH}/dreamerv3_smart_buffer_checkpoints")
             os.makedirs(save_dir, exist_ok=True)
             ckpt = algo.save(save_dir)
             print(f"📁 Latest checkpoint saved to: {ckpt}")
@@ -286,7 +285,7 @@ if __name__ == "__main__":
         # Save best checkpoint
         if eval_reward is not None and eval_reward > best_eval_reward:
             best_eval_reward = eval_reward
-            best_save_dir = os.path.join(os.environ['WORKING_DIR'], f"data/model_data/{TRAIN_DATA_PATH}/ppo_smart_buffer_best_checkpoint")
+            best_save_dir = os.path.join(os.environ['WORKING_DIR'], f"data/model_data/{TRAIN_DATA_PATH}/dreamerv3_smart_buffer_best_checkpoint")
             os.makedirs(best_save_dir, exist_ok=True)
             best_checkpoint_path = algo.save(best_save_dir)
             print(f"🏆 New best checkpoint! Eval reward: {eval_reward:.2f} -> {best_checkpoint_path}")
