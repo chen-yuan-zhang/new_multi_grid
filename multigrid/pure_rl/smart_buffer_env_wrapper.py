@@ -313,6 +313,11 @@ class SmartBufferObserverEnv(gym.Env):
         if self.current_scenario_episodes >= 50 and recent_success_rate < 0.01:
             print(f"⚠️ Stuck on scenario. Switching after {self.current_scenario_episodes} episodes with success rate {recent_success_rate:.2f}")
             return True
+
+        # final handle stuck, if we have done 200 episodes, just switch
+        if self.current_scenario_episodes >= 200:
+            print(f"⚠️ Long time on scenario. Switching after {self.current_scenario_episodes} episodes.")
+            return True
             
         return False
     
