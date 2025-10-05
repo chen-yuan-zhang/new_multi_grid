@@ -261,6 +261,7 @@ class BeliefUpdateObserver(BaseAgent):
             else:
                 use_neural = False
         
+        global PREDICTION_COUNT, DROP_PREDICTION_DUE_TO_LOW_THRESHOLD_COUNT
         if use_neural:
             # Neural predictor version
             formatted_successors = []
@@ -269,6 +270,7 @@ class BeliefUpdateObserver(BaseAgent):
                 formatted_successors.append((action, ((next_pos[0], next_pos[1]), next_dir)))
             # Uncomment the following line when neural predictor is available
             tran_probs = self.neuro_predict(self.env, goal, behavior_idx, formatted_successors, pos_state)
+            
             PREDICTION_COUNT += 1
             # handle the case where use neural_when_cp_threshold is True
             if use_neural_when_cp_threshold:
