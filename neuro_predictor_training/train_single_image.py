@@ -33,21 +33,21 @@ USER_PROMPT = """Task: Predict the next action.
 
 Behavior type: {behavior_description}
 
-Observation: see the first image
-Goal: see the second image
+Observation: see the image
+Goal: see the place with white dot
 
 Format:
 Return ONE action token from the allowed set. No extra words.
 """
 
-dataset_path = "/home/sukai/Project/chenyuan_project/new_multi_grid/data/training_data/actor_moves_dataset"
+dataset_path = "/home/sukai/Project/chenyuan_project/new_multi_grid/data/training_data/actor_moves_dataset_single_image"
 
 
 
 def convert_to_conversation(sample):
     img_full_path = os.path.join(dataset_path, sample["image_path"])
     # image_obj = Image.open(img_full_path)
-    goal_icon_full_path = Path(img_full_path).with_name(f"icon_{Path(img_full_path).name}")
+    # goal_icon_full_path = Path(img_full_path).with_name(f"icon_{Path(img_full_path).name}")
     # goal_icon_obj = Image.open(goal_icon_full_path)
     conversation = [
         {
@@ -60,7 +60,7 @@ def convert_to_conversation(sample):
           "content" : [
                 {"type" : "text",  "text"  : USER_PROMPT.format(behavior_description=sample["behavior_description"])},
                 {"type" : "image", "image" : f"file://{img_full_path}"},
-                {"type": "image", "image": f"file://{goal_icon_full_path}"}
+                # {"type": "image", "image": f"file://{goal_icon_full_path}"}
             ]
         },
         { "role" : "assistant",
@@ -82,13 +82,13 @@ if __name__ == "__main__":
     )
     model = FastVisionModel.get_peft_model(
         model,
-        finetune_vision_layers     = False, # False if not finetuning vision layers
+        finetune_vision_layers     = True, # False if not finetuning vision layers
         finetune_language_layers   = True, # False if not finetuning language layers
         finetune_attention_modules = True, # False if not finetuning attention layers
         finetune_mlp_modules       = True, # False if not finetuning MLP layers
 
-        r = 64,           # Reduced from 128 to 64 to prevent overfitting
-        lora_alpha = 128, # Reduced proportionally (2 * r)
+        r = 128,           # Reduced from 128 to 64 to prevent overfitting
+        lora_alpha = 256, # Reduced proportionally (2 * r)
         lora_dropout = 0.1, # Added dropout for regularization (10%)
         bias = "none", # "none", "all", "lora_only"
         random_state = 3407,
@@ -144,7 +144,7 @@ if __name__ == "__main__":
             weight_decay = 0.01,
             lr_scheduler_type = "cosine",
             seed = 3407,
-            output_dir = "outputs_noshuffle" if not if_shuffle else "outputs",
+            output_dir = "data/trained_models/neuro_predictor_for_ft_checkpoint" if not if_shuffle else "outputs",
             report_to = "wandb",     # For Weights and Biases
             save_total_limit=3,                 # Keep more checkpoints with more VRAM
             save_strategy="steps",
@@ -170,7 +170,7 @@ if __name__ == "__main__":
         ),
     )
     
-    trainer_stats = trainer.train()
+    trainer_stats = trainer.train(resume_from_checkpoint='/home/sukai/Project/chenyuan_project/new_multi_grid/data/trained_models/neuro_predictor_for_ft_checkpoint/step-9300')
 
     
     if wandb.run:

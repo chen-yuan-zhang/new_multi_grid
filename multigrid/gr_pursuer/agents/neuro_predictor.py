@@ -91,7 +91,20 @@ Rules:
   that maximizes expected progress toward the goal under that behavior.
 - Valid action set: {right, down, left, up}
 """
+
 USER_PROMPT = """Task: Predict the next action.
+
+
+Behavior type: {behavior_description}
+
+Observation: see the image
+Goal: see the place with white dot
+
+Format:
+Return ONE action token from the allowed set. No extra words.
+"""
+
+USER_PROMPT_DEPRECATED = """Task: Predict the next action.
 
 
 Behavior type: {behavior_description}
@@ -134,23 +147,40 @@ def load_actor_predictor_model():
 
 def convert_to_conversation(sample):
     img_pil = sample['image']
-    goal_icon_pil = sample['goal_icon']
-    conversation_test = [
-        {
-            "role": "system",
-            "content": [
-                {"type": "text", "text": SYSTEM_PROMPT}
+    if 'goal_icon' in sample:
+        goal_icon_pil = sample['goal_icon']
+        conversation_test = [
+            {
+                "role": "system",
+                "content": [
+                    {"type": "text", "text": SYSTEM_PROMPT}
+                ]
+            },
+            { "role": "user",
+            "content" : [
+                {"type" : "text",  "text"  : USER_PROMPT.format(behavior_description=sample["behavior_description"])},
+                {"type" : "image", "image" : img_pil},
+                {"type": "image", "image": goal_icon_pil}
             ]
-        },
-        { "role": "user",
-          "content" : [
-            {"type" : "text",  "text"  : USER_PROMPT.format(behavior_description=sample["behavior_description"])},
-            {"type" : "image", "image" : img_pil},
-            {"type": "image", "image": goal_icon_pil}
+            }
         ]
-        }
-    ]
-    return {"messages" : conversation_test }
+        return {"messages" : conversation_test }
+    else:
+        conversation_test = [
+            {
+                "role": "system",
+                "content": [
+                    {"type": "text", "text": SYSTEM_PROMPT}
+                ]
+            },
+            { "role": "user",
+            "content" : [
+                {"type" : "text",  "text"  : USER_PROMPT.format(behavior_description=sample["behavior_description"])},
+                {"type" : "image", "image" : img_pil},
+            ]
+            }
+        ]
+        return {"messages" : conversation_test }
 
 def process_message(message):
     global ACTOR_PREDICTOR_MODEL, ACTOR_PREDICTOR_TOKENIZER, ACTION_LABEL_IDS
@@ -219,7 +249,7 @@ CALLING_COUNTER = 0
 TIME_CHECKPOINT = time.time()
 
 
-def local_render(grid, width, height, pos_state, tile_size):
+def local_render(grid, width, height, pos_state, tile_size, goal_data=None):
     highlight_mask = np.zeros(shape=(width, height), dtype=bool)
     agent_pos, agent_dir = pos_state
     # Get agent locations
@@ -253,11 +283,20 @@ def local_render(grid, width, height, pos_state, tile_size):
             xmin = i * tile_size
             xmax = (i + 1) * tile_size
             img[ymin:ymax, xmin:xmax, :] = tile_img
+    # if goal_data is not None, then add a white color circle at the goal position
+    if goal_data is not None:
+        goal_x, goal_y = goal_data
+        goal_x = int(goal_x)
+        goal_y = int(goal_y)
+        # draw a white circle at the center of the goal cell
+        center_x = goal_x * tile_size + tile_size // 2
+        center_y = goal_y * tile_size + tile_size // 2
+        cv2.circle(img, (center_x, center_y), tile_size // 4, (255, 255, 255), -1) 
 
     return img
 
 
-def neuro_predict(env, goal, behavior_type, successors, pos_state, reference_action = None):
+def neuro_predict(env, goal, behavior_type, successors, pos_state):
     """Predict action probabilities using the neuro predictor model.
     Args:
         env: The environment object with grid and agents.
@@ -297,7 +336,7 @@ def neuro_predict(env, goal, behavior_type, successors, pos_state, reference_act
         width, height = env.width, env.height
         grid = env.grid
         tile_size = 13  # Increased tile size for better resolution
-        the_image = local_render(grid, width, height, pos_state, tile_size)
+        the_image = local_render(grid, width, height, pos_state, tile_size, goal_data=goal)
         IMAGE_FIFO_CACHE.put(the_image_key, the_image)
         
     # # debug image save 
@@ -309,13 +348,13 @@ def neuro_predict(env, goal, behavior_type, successors, pos_state, reference_act
     
     # # --- end of debug ---
     
-    # goal_desc_key = (id(env), goal)
-    goal_desc_key = (id_env, goal, map_size)
-    if goal_desc_key in IMAGE_FIFO_CACHE.cache:
-        goal_desc = IMAGE_FIFO_CACHE.get(goal_desc_key)
-    else:
-        goal_desc = get_location_icon(goal, map_size, the_image)
-        IMAGE_FIFO_CACHE.put(goal_desc_key, goal_desc)
+    # goal_desc_key = (id(env), goal) DEPRECATED
+    # goal_desc_key = (id_env, goal, map_size)
+    # if goal_desc_key in IMAGE_FIFO_CACHE.cache:
+    #     goal_desc = IMAGE_FIFO_CACHE.get(goal_desc_key)
+    # else:
+    #     goal_desc = get_location_icon(goal, map_size, the_image)
+    #     IMAGE_FIFO_CACHE.put(goal_desc_key, goal_desc)
         
     # noise = np.random.normal(0, 10, the_image.shape).astype(np.uint8)
     # image_aug = cv2.addWeighted(the_image, 0.9, noise, 0.1, 0)
@@ -324,7 +363,7 @@ def neuro_predict(env, goal, behavior_type, successors, pos_state, reference_act
     # * convert_to_conversation
     sample = {
         "image": the_image,
-        "goal_icon": goal_desc,
+        # "goal_icon": goal_desc,
         "behavior_description": int(behavior_type)
     } 
     
