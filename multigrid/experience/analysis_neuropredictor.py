@@ -217,9 +217,14 @@ if __name__ == "__main__":
     main(dataset_path=args.dataset, verbose=args.verbose)
     
     
+# training data eval results
+# python multigrid/experience/analysis_neuropredictor.py --dataset data/training_data/results_for_training_neuro_predictor_connected_only_sample_1500.csv
 # 🔍 Scenario 1500/1500 [neuro_predict] Called 21300 times. Time for last 50 calls: 11.27s
 #  | Style '0': 0.8673 | Style '1': 0.8629 | Style '3': 0.8614 | Style '2': 0.8800============================
 
 # ✅ Evaluation complete!
 #    Average Correctness: 0.8800
 #    Total Time: 3881.10 seconds
+
+# test data eval results    
+# python multigrid/experience/analysis_neuropredictor.py --dataset results_test_new.csv

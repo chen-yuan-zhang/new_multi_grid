@@ -194,9 +194,11 @@ def process_message(message):
     images, texts = [], []
     messages = message["messages"]
 
-    images.append(messages[-1]["content"][-2]["image"])
-        
-    images.append(messages[-1]["content"][-1]["image"])
+    if len(messages[-1]["content"]) == 3:
+        images.append(messages[-1]["content"][-2]["image"])
+        images.append(messages[-1]["content"][-1]["image"])
+    else:
+        images.append(messages[-1]["content"][-1]["image"])
         
     texts.append(ACTOR_PREDICTOR_TOKENIZER.apply_chat_template(messages, add_generation_prompt=True))
     
