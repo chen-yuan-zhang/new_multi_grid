@@ -25,7 +25,7 @@ from multigrid.gr_pursuer.agents.target import AstarTarget
 from multigrid.gr_pursuer.agents.observer import BeliefUpdateObserver
 from multigrid.core.actions import Action
 from multigrid.gr_pursuer.astar import get_successor
-
+from ray.rllib.utils.framework import convert_to_tensor
 from multigrid.pure_rl.obs_to_belief_image_array import preprocess_obs_for_rl_policy
 from ray.rllib.core import DEFAULT_MODULE_ID
 from ray.rllib.core.rl_module.rl_module import RLModule
@@ -133,7 +133,7 @@ def run_scenario(scenario_config: Dict[str, Any], verbose: bool = False) -> Tupl
     
     step = 0
     execution_time = 0.0
-    
+    is_first = 1.0
     # Start timing after environment setup is complete
     start_time = time()
     
@@ -221,6 +221,8 @@ def run_scenario(scenario_config: Dict[str, Any], verbose: bool = False) -> Tupl
             # Step environment with both observer and target actions
             actions = {0: observer_action, 1: target_action}
             observation, reward, terminated, truncated, info = env.step(actions)
+            
+            is_first = 0.0
             
             # Analyze current goal beliefs
             goal_beliefs = observer_agent.goal_belief.copy()
