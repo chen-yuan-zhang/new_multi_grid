@@ -1,0 +1,4 @@
+size,eval_success_count,eval_success_sum,eval_success_mean,eval_convergence_step_mean,eval_execution_time_mean,final_confidence_mean,visibility_ratio_mean
+10,446,358,0.8027,5.4036,68.4023,0.8242,0.5594
+12,542,405,0.7472,5.6845,57.9382,0.8042,0.5374
+15,512,371,0.7246,7.2324,55.0998,0.8005,0.5092
