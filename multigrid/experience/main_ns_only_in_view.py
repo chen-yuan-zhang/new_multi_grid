@@ -26,12 +26,17 @@ from multigrid.gr_pursuer.agents.observer import BeliefUpdateObserver
 from multigrid.core.actions import Action
 from multigrid.gr_pursuer.astar import get_successor
 
-def run_scenario(scenario_config: Dict[str, Any], verbose: bool = False) -> Tuple[bool, int, Dict[str, Any]]:
+use_neural_when_cp_threshold = None 
+
+def run_scenario(scenario_config: Dict[str, Any], observer_action_mode: str = 'greedy', 
+                 belief_update_mode: str = 'bayesian', verbose: bool = False) -> Tuple[bool, int, Dict[str, Any]]:
     """
     Run a single goal recognition scenario.
     
     Args:
         scenario_config: Dictionary containing all scenario parameters
+        observer_action_mode: Observer action selection mode ('greedy', 'stay', 'random')
+        belief_update_mode: Belief update strategy ('bayesian', 'optimal', 'uniform')
         verbose: Whether to print detailed progress information
         
     Returns:
@@ -71,8 +76,23 @@ def run_scenario(scenario_config: Dict[str, Any], verbose: bool = False) -> Tupl
     
     observation, info = env.reset()
     
-    # Create observer agent (algorithm under test)
-    observer_agent = BeliefUpdateObserver(env, use_neural_predictor=True, use_neural_when_in_view_only=True)
+    # Create observer agent with specified modes
+
+    global use_neural_when_cp_threshold
+
+    if belief_update_mode != 'bayesian':
+        use_neural_when_cp_threshold = False
+    else:
+        use_neural_when_cp_threshold = True  # Only use neural predictor when Bayesian belief is uncertain
+
+    observer_agent = BeliefUpdateObserver(
+        env,
+        observer_action_mode=observer_action_mode,
+        belief_update_mode=belief_update_mode,
+        use_neural_predictor=True, 
+        use_neural_when_in_view_only=True,
+        use_neural_when_cp_threshold=use_neural_when_cp_threshold,
+    )
     
     # Track performance metrics
     success = False
@@ -220,12 +240,15 @@ def run_scenario(scenario_config: Dict[str, Any], verbose: bool = False) -> Tupl
     return success, convergence_step, results
 
 
-def main(dataset_path: Optional[str] = None, verbose: bool = False) -> None:
+def main(dataset_path: Optional[str] = None, observer_action_mode: str = 'greedy',
+         belief_update_mode: str = 'bayesian', verbose: bool = False) -> None:
     """
     Run goal recognition evaluation on a dataset.
     
     Args:
         dataset_path: Path to CSV dataset file
+        observer_action_mode: Observer action selection mode ('greedy', 'stay', 'random')
+        belief_update_mode: Belief update strategy ('bayesian', 'optimal', 'uniform')
         verbose: Whether to print detailed progress information
     """
     if dataset_path is None:
@@ -234,6 +257,9 @@ def main(dataset_path: Optional[str] = None, verbose: bool = False) -> None:
         
     try:
         print(f"📖 Loading dataset: {dataset_path}")
+        print(f"🎮 Configuration:")
+        print(f"   Observer action mode: {observer_action_mode}")
+        print(f"   Belief update mode: {belief_update_mode}")
         scenarios_df = pd.read_csv(dataset_path)
         print(f"📊 Found {len(scenarios_df)} scenarios")
         
@@ -284,8 +310,13 @@ def main(dataset_path: Optional[str] = None, verbose: bool = False) -> None:
                 'target_actions': [Action(v) for v in json.loads(scenario_row['all_actions'])]
             }
             
-            # Run scenario
-            success, convergence_step, results = run_scenario(scenario_config, verbose)
+            # Run scenario with specified modes
+            success, convergence_step, results = run_scenario(
+                scenario_config, 
+                observer_action_mode=observer_action_mode,
+                belief_update_mode=belief_update_mode,
+                verbose=verbose
+            )
             
             # Update statistics with comprehensive analysis (using eval_ prefix like main_simple.py)
             scenarios_df.loc[idx, 'eval_success'] = success
@@ -494,7 +525,8 @@ def main(dataset_path: Optional[str] = None, verbose: bool = False) -> None:
     
     # Add results to dataframe for final save
     dataset_name = dataset_path.split("/")[-1].replace(".csv", "")
-    final_output_file = f"ns_only_in_view_cp_enabled_evaluation_results_training_dataname_{dataset_name}.csv"
+    global use_neural_when_cp_threshold
+    final_output_file = f"ns_only_in_view_threshold_{use_neural_when_cp_threshold}_{observer_action_mode}_{belief_update_mode}_results_dataname_{dataset_name}.csv"
     scenarios_df.to_csv(final_output_file, index=False)
     print(f"\n💾 Results saved: {final_output_file}")
       
@@ -504,8 +536,28 @@ if __name__ == "__main__":
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  python main.py --dataset goal_recognition_dataset.csv
-  python main.py --dataset results.csv --verbose
+  # Default: greedy observer with Bayesian belief updates (neural predictor enabled)
+  python main_ns_only_in_view.py --dataset goal_recognition_dataset.csv
+  
+  # Stationary observer with Bayesian belief updates
+  python main_ns_only_in_view.py --dataset results.csv --action-mode stay
+  
+  # Random observer with uniform belief (baseline)
+  python main_ns_only_in_view.py --dataset results.csv --action-mode random --belief-mode uniform
+  
+  # Greedy observer with optimal belief (point estimate)
+  python main_ns_only_in_view.py --dataset results.csv --action-mode greedy --belief-mode optimal
+  
+  # All combinations for ablation study
+  python main_ns_only_in_view.py --dataset results.csv --action-mode greedy --belief-mode bayesian
+  python main_ns_only_in_view.py --dataset results.csv --action-mode greedy --belief-mode optimal
+  python main_ns_only_in_view.py --dataset results.csv --action-mode greedy --belief-mode uniform
+  python main_ns_only_in_view.py --dataset results.csv --action-mode stay --belief-mode bayesian
+  python main_ns_only_in_view.py --dataset results.csv --action-mode stay --belief-mode optimal
+  python main_ns_only_in_view.py --dataset results.csv --action-mode stay --belief-mode uniform
+  python main_ns_only_in_view.py --dataset results.csv --action-mode random --belief-mode bayesian
+  python main_ns_only_in_view.py --dataset results.csv --action-mode random --belief-mode optimal
+  python main_ns_only_in_view.py --dataset results.csv --action-mode random --belief-mode uniform
         """
     )
     
@@ -517,10 +569,26 @@ Examples:
     )
     
     parser.add_argument(
+        "--action-mode",
+        type=str,
+        choices=['greedy', 'stay', 'random'],
+        default='greedy',
+        help="Observer action selection mode (default: greedy)"
+    )
+    
+    parser.add_argument(
+        "--belief-mode",
+        type=str,
+        choices=['bayesian', 'optimal', 'uniform'],
+        default='bayesian',
+        help="Belief update strategy (default: bayesian)"
+    )
+    
+    parser.add_argument(
         "--verbose", 
         action="store_true",
         help="Print detailed progress information"
     )
     
     args = parser.parse_args()
-    main(args.dataset, args.verbose)
+    main(args.dataset, args.action_mode, args.belief_mode, args.verbose)
