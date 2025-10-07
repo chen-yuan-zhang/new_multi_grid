@@ -25,7 +25,27 @@ DROP_PREDICTION_DUE_TO_LOW_THRESHOLD_COUNT = 0
 PREDICTION_COUNT = 0
 
 class BeliefUpdateObserver(BaseAgent):
-    def __init__(self, env, init_actor_belief = None, init_goal_belief = None, use_neural_predictor = False, use_log_space = True, use_neural_when_in_view_only = False, use_neural_when_cp_threshold = True):
+    def __init__(self, env, init_actor_belief = None, init_goal_belief = None, 
+                 use_neural_predictor = False, use_log_space = True, 
+                 use_neural_when_in_view_only = False, use_neural_when_cp_threshold = True,
+                 observer_action_mode = 'greedy', belief_update_mode = 'bayesian'):
+        """
+        Initialize the BeliefUpdateObserver.
+        
+        Parameters:
+        -----------
+        observer_action_mode : str, default='greedy'
+            How the observer selects actions:
+            - 'greedy': Move toward most likely actor position
+            - 'stay': Always stay in place
+            - 'random': Randomly select from available actions
+            
+        belief_update_mode : str, default='bayesian'
+            How beliefs are updated:
+            - 'bayesian': Full Bayesian update with transition probabilities
+            - 'optimal': Concentrate belief at most likely position (point estimate)
+            - 'uniform': Maintain uniform distribution (no learning)
+        """
         # For Sukai: set use_neural_predictor = True to use neural predictor
         
         super().__init__(env.observer)
@@ -49,6 +69,20 @@ class BeliefUpdateObserver(BaseAgent):
         self.use_neural_when_cp_threshold = use_neural_when_cp_threshold
         self.cp_threshold = CP_THRESHOLD
         self.use_log_space = use_log_space
+        
+        # Store and validate action and belief update modes
+        self.observer_action_mode = observer_action_mode
+        self.belief_update_mode = belief_update_mode
+        
+        # Validate observer action mode
+        valid_action_modes = ['greedy', 'stay', 'random']
+        if self.observer_action_mode not in valid_action_modes:
+            raise ValueError(f"observer_action_mode must be one of {valid_action_modes}, got '{self.observer_action_mode}'")
+        
+        # Validate belief update mode
+        valid_belief_modes = ['bayesian', 'optimal', 'uniform']
+        if self.belief_update_mode not in valid_belief_modes:
+            raise ValueError(f"belief_update_mode must be one of {valid_belief_modes}, got '{self.belief_update_mode}'")
 
         if init_goal_belief:
             self.goal_belief = init_goal_belief
@@ -285,6 +319,39 @@ class BeliefUpdateObserver(BaseAgent):
             
         
         if not use_neural:
+            if self.belief_update_mode == 'uniform':
+                # Uniform distribution over successors
+                uniform_prob = 1.0 / len(successors) if successors else 0.0
+                for action, succ in successors:
+                    next_pos, next_dir = succ
+                    succ_state = ((next_pos[0], next_pos[1]), next_dir)
+                    tran_probs[succ_state] = uniform_prob
+
+                return tran_probs
+
+            if self.belief_update_mode == 'optimal':
+                # Optimal (point estimate) - concentrate all probability on most likely successor
+                best_succ = None
+                best_value = -np.inf
+                
+                for action, succ in successors:
+                    next_pos, next_dir = succ
+                    succ_state = ((next_pos[0], next_pos[1]), next_dir)
+                    if (succ_state, goal) in self.dist_matrix:
+                        value = -self.dist_matrix[(succ_state, goal)]  # Negative distance as value
+                    else:
+                        value = -np.inf
+                    
+                    if value > best_value:
+                        best_value = value
+                        best_succ = succ_state
+                
+                for action, succ in successors:
+                    next_pos, next_dir = succ
+                    succ_state = ((next_pos[0], next_pos[1]), next_dir)
+                    tran_probs[succ_state] = 1.0 if succ_state == best_succ else 0.0
+                
+                return tran_probs
             # Symbolic model - compute in log space to avoid underflow
             log_tran_probs = {}
             for action, succ in successors:
@@ -429,6 +496,9 @@ class BeliefUpdateObserver(BaseAgent):
             'hit_rate': hit_rate,
             'total_requests': total_requests
         }
+    
+    
+
 
         
     def compute_action(self, obs, render_and_save=False, get_action=True):
@@ -447,19 +517,28 @@ class BeliefUpdateObserver(BaseAgent):
         
         self.update_goal_belief() 
         # update the goal belief based on the belief of the observer, each entry is the conditional prob P(goal|obs history)
-        # assume goal directed behavior, predict next step belief based on current belief
-        self.actor_belief = self.update_actor_belief_multi_cached(self.actor_belief, self.goals, target_visible) 
-        # update the actor belief based on the goal belief, each entry is the joint prob P(state, goal, obs history)
         
+
+        self.actor_belief = self.update_actor_belief_multi_cached(self.actor_belief, self.goals, target_visible)
+
+
         # Normalize actor beliefs to ensure probability sums to 1
         self.normalize_actor_beliefs_to_one()
         
         if render_and_save:
             self.render_and_save(f'belief_update_test/actor_belief_step_{self.step}.png', obs)
 
-        # Use greedy action selection instead of MCTS
+        # Select action based on observer action mode
         if get_action:
-            return self.greedy()
+            if self.observer_action_mode == 'greedy':
+                return self.greedy()
+            elif self.observer_action_mode == 'stay':
+                return Action.stay
+            elif self.observer_action_mode == 'random':
+                return self.random_action()
+            else:
+                # Fallback to greedy
+                return self.greedy()
         else:
             return None
 
@@ -550,6 +629,29 @@ class BeliefUpdateObserver(BaseAgent):
         else:
             # 180 degree turn needed, choose left arbitrarily
             return Action.left
+    
+    def random_action(self):
+        """
+        Select a random action from the available (valid) actions.
+        Uses get_successor to determine which actions are valid from the current state.
+        """
+        # Get current state
+        current_pos = tuple(self.pos)
+        current_dir = int(self.dir)
+        pos_state = (current_pos, current_dir)
+        
+        # Get available successors (valid actions from current state)
+        successors = get_successor(self.env, pos_state)
+        
+        if not successors:
+            # No valid successors, stay in place
+            return Action.stay
+        
+        # Extract just the actions from successors (action, next_state) tuples
+        available_actions = [action for action, _ in successors]
+        
+        # Randomly select one of the available actions
+        return np.random.choice(available_actions)
     
     def get_most_likely_actor_position(self):
         """
