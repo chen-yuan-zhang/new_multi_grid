@@ -19,13 +19,15 @@ import pandas as pd
 import json
 from typing import Dict, List, Tuple, Optional, Any
 from time import time
-
+import tree 
 from multigrid.envs.goal_prediction import AGREnv
 from multigrid.gr_pursuer.agents.target import AstarTarget
 from multigrid.gr_pursuer.agents.observer import BeliefUpdateObserver
 from multigrid.core.actions import Action
 from multigrid.gr_pursuer.astar import get_successor
-
+from ray.rllib.algorithms.dreamerv3.dreamerv3 import DreamerV3Config
+from ray.rllib.core.columns import Columns
+from ray.rllib.utils.framework import convert_to_tensor
 from multigrid.pure_rl.obs_to_belief_image_array import preprocess_obs_for_rl_policy
 from ray.rllib.core import DEFAULT_MODULE_ID
 from ray.rllib.core.rl_module.rl_module import RLModule
@@ -36,7 +38,7 @@ import os
 from time import sleep
 from PIL import Image
 
-RL_CASE = 'one_step' # 'one_step' or 'iterate'
+RL_CASE = 'iterate' # 'one_step' or 'iterate'
 
 def run_scenario(scenario_config: Dict[str, Any], verbose: bool = False) -> Tuple[bool, int, Dict[str, Any]]:
     """
@@ -88,17 +90,34 @@ def run_scenario(scenario_config: Dict[str, Any], verbose: bool = False) -> Tupl
     observer_agent = BeliefUpdateObserver(env)
     
     # ! Load RL Policy model 
-    ppo_checkpoint_path = os.environ['RL_POLICY_CHECKPOINT_PATH']
+    rl_policy_checkpoint_path = os.environ['RL_POLICY_CHECKPOINT_PATH']
     rl_module = RLModule.from_checkpoint(
         os.path.join(
-            ppo_checkpoint_path,
+            rl_policy_checkpoint_path,
             'learner_group',
             'learner',
             'rl_module',
             DEFAULT_MODULE_ID,
         )
     )
+    # put rl_module to GPU
+    rl_module.to('cuda')
     
+    global RL_CASE
+
+    
+    if RL_CASE == 'iterate':
+        # we will have 4 sets of states, one for each behavior type
+        states = [] 
+        for i in range(4):
+            state_i = rl_module.get_initial_state()
+            state_i = tree.map_structure(lambda s: s.unsqueeze(0), state_i)
+            states.append(state_i)
+    else:
+        states = rl_module.get_initial_state()
+        # Batch the states to B=1.
+        states = tree.map_structure(lambda s: s.unsqueeze(0), states)
+        
     # Track performance metrics
     success = False
     convergence_step = -1
@@ -113,7 +132,7 @@ def run_scenario(scenario_config: Dict[str, Any], verbose: bool = False) -> Tupl
     
     step = 0
     execution_time = 0.0
-    
+    is_first = 1.0
     # Start timing after environment setup is complete
     start_time = time()
     
@@ -131,7 +150,6 @@ def run_scenario(scenario_config: Dict[str, Any], verbose: bool = False) -> Tupl
             _ = observer_agent.compute_action(observation[0])
             
             # ! ---- RL Policy Action Selection ---- !
-            global RL_CASE
             if RL_CASE == 'one_step':
                 obs_processed = preprocess_obs_for_rl_policy(
                     belief_update_observer=observer_agent,
@@ -148,15 +166,17 @@ def run_scenario(scenario_config: Dict[str, Any], verbose: bool = False) -> Tupl
                 # img_pil = Image.fromarray(vis_img)
                 # img_pil.save(os.path.join(save_dir, f'step_{step+1}_belief_new.png'))
                 # * --- end of temp save ---
-                
+                states['a'] = states['a'].to('cuda')
                 input_dict = {
-                    Columns.OBS: torch.from_numpy(obs_processed).to('cuda').unsqueeze(0),
+                    Columns.STATE_IN: states,
+                    Columns.OBS: torch.from_numpy(obs_processed).to('cuda').unsqueeze(0).unsqueeze(0),  # Add batch and time dims
+                    "is_first": convert_to_tensor(is_first, "torch")[None].to('cuda'),
                 }
-                
                 rl_module_out = rl_module.forward_inference(input_dict)
-                logits = convert_to_numpy(rl_module_out[Columns.ACTION_DIST_INPUTS])
-                
-                observer_action = int(np.argmax(logits))
+                observer_action = rl_module_out[Columns.ACTIONS].detach().cpu().numpy()[0]
+                observer_action = int(observer_action[0])
+                # Extract states from out. States are returned as batched.
+                states = rl_module_out[Columns.STATE_OUT]
             
             # print(f"      Step {step}: Observer action {observer_action}, Target action {target_actions[step]}, logits {logits}")
             
@@ -167,14 +187,32 @@ def run_scenario(scenario_config: Dict[str, Any], verbose: bool = False) -> Tupl
                         obs=observation[0],
                         behavior_type=i,
                     ) for i in range(4)]
-                input_dict = {
-                    Columns.OBS: torch.from_numpy(np.stack(obs_processed_lst, axis=0)).to('cuda'),
-                }
-                rl_module_out = rl_module.forward_inference(input_dict)
-                logits = convert_to_numpy(rl_module_out[Columns.ACTION_DIST_INPUTS]) # shape (4, num_actions)
-                avg_logits = np.mean(logits, axis=0)  # shape (num_actions,)
-                # randomly sample action 
-                observer_action = int(np.random.choice(len(avg_logits), p=softmax(torch.from_numpy(avg_logits), dim=-1).numpy()))
+                action_lst = []
+                for i in range(4):
+                    states[i]['a'] = states[i]['a'].to('cuda')
+                    input_dict = {
+                        Columns.STATE_IN: states[i],
+                        Columns.OBS: torch.from_numpy(obs_processed_lst[i]).to('cuda').unsqueeze(0).unsqueeze(0),  # Add batch and time dims
+                        "is_first": convert_to_tensor(is_first, "torch")[None].to('cuda'),
+                    }
+                    rl_module_out = rl_module.forward_inference(input_dict)
+                    observer_action = rl_module_out[Columns.ACTIONS].detach().cpu().numpy()[0]
+                    observer_action = int(observer_action[0])
+                    action_lst.append(observer_action)
+                    # Extract states from out. States are returned as batched.
+                    states[i] = rl_module_out[Columns.STATE_OUT]
+                # now get the majority vote
+                action_count = {}
+                for a in action_lst:
+                    if a not in action_count:
+                        action_count[a] = 0
+                    action_count[a] += 1
+                max_count = -1
+                observer_action = None
+                for a, count in action_count.items():
+                    if count > max_count:
+                        max_count = count
+                        observer_action = a
                 
             # ! ---- End RL Policy Action Selection ---- !
 
@@ -182,6 +220,8 @@ def run_scenario(scenario_config: Dict[str, Any], verbose: bool = False) -> Tupl
             # Step environment with both observer and target actions
             actions = {0: observer_action, 1: target_action}
             observation, reward, terminated, truncated, info = env.step(actions)
+            
+            is_first = 0.0
             
             # Analyze current goal beliefs
             goal_beliefs = observer_agent.goal_belief.copy()
@@ -570,7 +610,7 @@ def main(dataset_path: Optional[str] = None, verbose: bool = False) -> None:
     
     # Add results to dataframe for final save
     dataset_name = dataset_path.split("/")[-1].replace(".csv", "")
-    final_output_file = f"rl_only_evaluation_results_training_dataname_{dataset_name}.csv"
+    final_output_file = f"rl_only_dreamerv3_evaluation_results_training_dataname_{dataset_name}.csv"
     scenarios_df.to_csv(final_output_file, index=False)
     print(f"\n💾 Results saved: {final_output_file}")
       
