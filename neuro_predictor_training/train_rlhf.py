@@ -200,7 +200,7 @@ if __name__ == "__main__":
     input("Press Enter to continue...")
 
     training_args = GRPOConfig(
-        learning_rate = 5e-6,
+        learning_rate = 1e-6,
         adam_beta1 = 0.9,
         adam_beta2 = 0.99,
         weight_decay = 0.1,
@@ -209,7 +209,7 @@ if __name__ == "__main__":
         optim = "adamw_8bit",
         logging_steps = 20,
         log_completions = False,
-        per_device_train_batch_size = 1,
+        per_device_train_batch_size = 12,
         gradient_accumulation_steps = 2, # Increase to 4 for smoother training
         num_generations = 4, # Decrease if out of memory
         max_prompt_length = 1024,

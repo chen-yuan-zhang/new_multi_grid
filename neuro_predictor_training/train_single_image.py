@@ -76,26 +76,27 @@ if __name__ == "__main__":
     wandb.init(project="chenyuan_action_prediction", name=project_name)
 
     model, tokenizer = FastVisionModel.from_pretrained(
-        "unsloth/Qwen2.5-VL-3B-Instruct-bnb-4bit",
+        '/home/sukai/Project/chenyuan_project/new_multi_grid/data/trained_models/neuro_predictor_for_ft_checkpoint/checkpoint-10500',
+        # "unsloth/Qwen2.5-VL-3B-Instruct-bnb-4bit",
         load_in_4bit = True, # Use 4bit to reduce memory use. False for 16bit LoRA.
         use_gradient_checkpointing = "unsloth", # True or "unsloth" for long context
     )
-    model = FastVisionModel.get_peft_model(
-        model,
-        finetune_vision_layers     = True, # False if not finetuning vision layers
-        finetune_language_layers   = True, # False if not finetuning language layers
-        finetune_attention_modules = True, # False if not finetuning attention layers
-        finetune_mlp_modules       = True, # False if not finetuning MLP layers
+    # model = FastVisionModel.get_peft_model(
+    #     model,
+    #     finetune_vision_layers     = True, # False if not finetuning vision layers
+    #     finetune_language_layers   = True, # False if not finetuning language layers
+    #     finetune_attention_modules = True, # False if not finetuning attention layers
+    #     finetune_mlp_modules       = True, # False if not finetuning MLP layers
 
-        r = 128,           # Reduced from 128 to 64 to prevent overfitting
-        lora_alpha = 256, # Reduced proportionally (2 * r)
-        lora_dropout = 0.1, # Added dropout for regularization (10%)
-        bias = "none", # "none", "all", "lora_only"
-        random_state = 3407,
-        use_rslora = True,  # We support rank stabilized LoRA
-        loftq_config = None, # And LoftQ
-        # target_modules = "all-linear", # Optional now! Can specify a list if needed
-    )
+    #     r = 128,           # Reduced from 128 to 64 to prevent overfitting
+    #     lora_alpha = 256, # Reduced proportionally (2 * r)
+    #     lora_dropout = 0.1, # Added dropout for regularization (10%)
+    #     bias = "none", # "none", "all", "lora_only"
+    #     random_state = 3407,
+    #     use_rslora = True,  # We support rank stabilized LoRA
+    #     loftq_config = None, # And LoftQ
+    #     # target_modules = "all-linear", # Optional now! Can specify a list if needed
+    # )
     
     dataset = load_dataset(dataset_path, split="train")
     a = list(dataset)
@@ -144,7 +145,7 @@ if __name__ == "__main__":
             weight_decay = 0.01,
             lr_scheduler_type = "cosine",
             seed = 3407,
-            output_dir = "data/trained_models/neuro_predictor_for_ft_checkpoint" if not if_shuffle else "outputs",
+            output_dir = "data/trained_models/neuro_predictor_for_ft_checkpoint_new" if not if_shuffle else "outputs",
             report_to = "wandb",     # For Weights and Biases
             save_total_limit=3,                 # Keep more checkpoints with more VRAM
             save_strategy="steps",
@@ -170,7 +171,7 @@ if __name__ == "__main__":
         ),
     )
     
-    trainer_stats = trainer.train(resume_from_checkpoint='/home/sukai/Project/chenyuan_project/new_multi_grid/data/trained_models/neuro_predictor_for_ft_checkpoint/step-9300')
+    trainer_stats = trainer.train()
 
     
     if wandb.run:

@@ -92,7 +92,7 @@ Rules:
 - Valid action set: {right, down, left, up}
 """
 
-USER_PROMPT = """Task: Predict the next action.
+USER_PROMPT_BACKUP = """Task: Predict the next action.
 
 
 Behavior type: {behavior_description}
@@ -104,7 +104,7 @@ Format:
 Return ONE action token from the allowed set. No extra words.
 """
 
-USER_PROMPT_DEPRECATED = """Task: Predict the next action.
+USER_PROMPT = """Task: Predict the next action.
 
 
 Behavior type: {behavior_description}
@@ -338,7 +338,10 @@ def neuro_predict(env, goal, behavior_type, successors, pos_state):
         width, height = env.width, env.height
         grid = env.grid
         tile_size = 13  # Increased tile size for better resolution
-        the_image = local_render(grid, width, height, pos_state, tile_size, goal_data=goal)
+        # single image rendering
+        # the_image = local_render(grid, width, height, pos_state, tile_size, goal_data=goal)
+        # two image rendering (deprecated)
+        the_image = local_render(grid, width, height, pos_state, tile_size)
         IMAGE_FIFO_CACHE.put(the_image_key, the_image)
         
     # # debug image save 
@@ -350,14 +353,16 @@ def neuro_predict(env, goal, behavior_type, successors, pos_state):
     
     # # --- end of debug ---
     
-    # goal_desc_key = (id(env), goal) DEPRECATED
-    # goal_desc_key = (id_env, goal, map_size)
-    # if goal_desc_key in IMAGE_FIFO_CACHE.cache:
-    #     goal_desc = IMAGE_FIFO_CACHE.get(goal_desc_key)
-    # else:
-    #     goal_desc = get_location_icon(goal, map_size, the_image)
-    #     IMAGE_FIFO_CACHE.put(goal_desc_key, goal_desc)
+    # two image rendering (deprecated)
+    goal_desc_key = (id(env), goal) # DEPRECATED
+    goal_desc_key = (id_env, goal, map_size)
+    if goal_desc_key in IMAGE_FIFO_CACHE.cache:
+        goal_desc = IMAGE_FIFO_CACHE.get(goal_desc_key)
+    else:
+        goal_desc = get_location_icon(goal, map_size, the_image)
+        IMAGE_FIFO_CACHE.put(goal_desc_key, goal_desc)
         
+    # deprecated noise 
     # noise = np.random.normal(0, 10, the_image.shape).astype(np.uint8)
     # image_aug = cv2.addWeighted(the_image, 0.9, noise, 0.1, 0)
     
@@ -365,7 +370,7 @@ def neuro_predict(env, goal, behavior_type, successors, pos_state):
     # * convert_to_conversation
     sample = {
         "image": the_image,
-        # "goal_icon": goal_desc,
+        "goal_icon": goal_desc, # deprecated
         "behavior_description": int(behavior_type)
     } 
     
