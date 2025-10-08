@@ -31,6 +31,7 @@ multigrid/pure_rl/ppo_observer_checkpoints
 
 data/training_data/actor_moves_dataset/
 data/training_data/actor_moves_dataset_single_image/
+data/training_data/
 **/__pycache__
 **/.ipynb_checkpoints/*
 modules/

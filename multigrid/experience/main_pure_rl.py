@@ -36,8 +36,6 @@ import os
 from time import sleep
 from PIL import Image
 
-RL_CASE = 'one_step' # 'one_step' or 'iterate'
-
 def run_scenario(scenario_config: Dict[str, Any], verbose: bool = False) -> Tuple[bool, int, Dict[str, Any]]:
     """
     Run a single goal recognition scenario.
@@ -59,18 +57,17 @@ def run_scenario(scenario_config: Dict[str, Any], verbose: bool = False) -> Tupl
     observer_dir = scenario_config['observer_dir']
     target_dir = scenario_config['target_dir']
     target_actions = scenario_config['target_actions']
-    hidden_cost_type = scenario_config['hidden_cost_type']
-    
+
     if verbose:
         print(f"    🎯 Target goal: {goal}")
         print(f"    📍 Observer: {observer_pos} (dir {observer_dir})")
         print(f"    🎲 Target: {target_pos} (dir {target_dir})")
         print(f"    📏 Trajectory length: {len(target_actions)} steps")
-    
+
     # Setup environment
     agents_start_pos = [observer_pos, target_pos]
     agents_start_dir = [observer_dir, target_dir]
-    
+
     env = AGREnv(
         base_grid=base_grid,
         goals=goals, 
@@ -81,12 +78,12 @@ def run_scenario(scenario_config: Dict[str, Any], verbose: bool = False) -> Tupl
         agents_start_dir=agents_start_dir,
         render_mode=None
     )
-    
+
     observation, info = env.reset()
-    
+
     # Create observer agent (algorithm under test)
     observer_agent = BeliefUpdateObserver(env)
-    
+
     # ! Load RL Policy model 
     ppo_checkpoint_path = os.environ['RL_POLICY_CHECKPOINT_PATH']
     rl_module = RLModule.from_checkpoint(
@@ -98,7 +95,7 @@ def run_scenario(scenario_config: Dict[str, Any], verbose: bool = False) -> Tupl
             DEFAULT_MODULE_ID,
         )
     )
-    
+
     # Track performance metrics
     success = False
     convergence_step = -1
@@ -106,95 +103,76 @@ def run_scenario(scenario_config: Dict[str, Any], verbose: bool = False) -> Tupl
     goal_belief_history = []
     max_confidence_history = []
     predicted_goals_history = []
-    
+
     # Track visibility data for analysis
     visibility_history = []  # List of True/False for in view/not in view
     confidence_history = []   # Track max confidence over time
-    
+
     step = 0
     execution_time = 0.0
-    
+
     # Start timing after environment setup is complete
     start_time = time()
-    
+
     try:
         for step, target_action in enumerate(target_actions):
             # Check visibility before updating beliefs
             observer_obs = observation[0] if isinstance(observation, dict) and 0 in observation else observation
             target_visible = "target_pos" in observer_obs or observer_agent.pos == env.target.pos
             visibility_history.append(target_visible)
-            
+
             if verbose and step == 0:
                 print(f"        Step {step}: Target visible: {'✅' if target_visible else '❌'}")
-            
+
             # Observer actively moves using the action returned by compute_action
             _ = observer_agent.compute_action(observation[0])
-            
+
             # ! ---- RL Policy Action Selection ---- !
-            global RL_CASE
-            if RL_CASE == 'one_step':
-                obs_processed = preprocess_obs_for_rl_policy(
-                    belief_update_observer=observer_agent,
-                    obs=observation[0],
-                    behavior_type=hidden_cost_type,
-                )
-                
-                # * temp save the processed obs
-                # vis_img = ((obs_processed + 1.0) * 128.0).astype(np.uint8)
-                # vis_img = np.clip(vis_img, 0, 255)
-                # # save vis_img
-                # save_dir = os.path.join(os.environ['PYTHONPATH'], 'rl_demo_observer_obs')
-                # os.makedirs(save_dir, exist_ok=True)
-                # img_pil = Image.fromarray(vis_img)
-                # img_pil.save(os.path.join(save_dir, f'step_{step+1}_belief_new.png'))
-                # * --- end of temp save ---
-                
-                input_dict = {
-                    Columns.OBS: torch.from_numpy(obs_processed).to('cuda').unsqueeze(0),
-                }
-                
-                rl_module_out = rl_module.forward_inference(input_dict)
-                logits = convert_to_numpy(rl_module_out[Columns.ACTION_DIST_INPUTS])
-                
-                observer_action = int(np.argmax(logits))
-            
+            obs_processed = preprocess_obs_for_rl_policy(
+                belief_update_observer=observer_agent,
+                obs=observation[0],
+            )
+
+            # * temp save the processed obs
+            # vis_img = ((obs_processed + 1.0) * 128.0).astype(np.uint8)
+            # vis_img = np.clip(vis_img, 0, 255)
+            # # save vis_img
+            # save_dir = os.path.join(os.environ['PYTHONPATH'], 'rl_demo_observer_obs')
+            # os.makedirs(save_dir, exist_ok=True)
+            # img_pil = Image.fromarray(vis_img)
+            # img_pil.save(os.path.join(save_dir, f'step_{step+1}_belief_new.png'))
+            # * --- end of temp save ---
+
+            input_dict = {
+                Columns.OBS: torch.from_numpy(obs_processed).unsqueeze(0),
+            }
+
+            rl_module_out = rl_module.forward_inference(input_dict)
+            logits = convert_to_numpy(rl_module_out[Columns.ACTION_DIST_INPUTS])
+
+            observer_action = int(np.argmax(logits))
+
             # print(f"      Step {step}: Observer action {observer_action}, Target action {target_actions[step]}, logits {logits}")
-            
-            # case two: iterate over all behavior types and average the action logits and then pick 
-            elif RL_CASE == 'iterate':
-                obs_processed_lst = [preprocess_obs_for_rl_policy(
-                        belief_update_observer=observer_agent,
-                        obs=observation[0],
-                        behavior_type=i,
-                    ) for i in range(4)]
-                input_dict = {
-                    Columns.OBS: torch.from_numpy(np.stack(obs_processed_lst, axis=0)).to('cuda'),
-                }
-                rl_module_out = rl_module.forward_inference(input_dict)
-                logits = convert_to_numpy(rl_module_out[Columns.ACTION_DIST_INPUTS]) # shape (4, num_actions)
-                avg_logits = np.mean(logits, axis=0)  # shape (num_actions,)
-                # randomly sample action 
-                observer_action = int(np.random.choice(len(avg_logits), p=softmax(torch.from_numpy(avg_logits), dim=-1).numpy()))
-                
+
             # ! ---- End RL Policy Action Selection ---- !
 
-            
+
             # Step environment with both observer and target actions
             actions = {0: observer_action, 1: target_action}
             observation, reward, terminated, truncated, info = env.step(actions)
-            
+
             # Analyze current goal beliefs
             goal_beliefs = observer_agent.goal_belief.copy()
             predicted_goal = max(goal_beliefs.items(), key=lambda x: x[1])
             max_confidence = predicted_goal[1]
             predicted_goal_pos = predicted_goal[0]
-            
+
             # Store belief history
             goal_belief_history.append(goal_beliefs)
             max_confidence_history.append(max_confidence)
             predicted_goals_history.append(predicted_goal_pos)
             confidence_history.append(max_confidence)
-            
+
             # Check for convergence (stable correct prediction)
             if predicted_goal_pos == goal and max_confidence > 0.5:
                 # Mark first time we get correct prediction
@@ -208,12 +186,11 @@ def run_scenario(scenario_config: Dict[str, Any], verbose: bool = False) -> Tupl
                     first_correct_step = -1
                     if verbose:
                         print(f"      ⚠️  Lost correct prediction at step {observer_agent.step}")
-            
+
             step += 1
-            
+
     except Exception as e:
         print(f"      ❌ Error during scenario execution: {e}")
-        raise e
         # Calculate execution time before returning
         execution_time = time() - start_time
         try:
@@ -231,7 +208,7 @@ def run_scenario(scenario_config: Dict[str, Any], verbose: bool = False) -> Tupl
             'final_confidence': 0.0,
             'max_confidence_reached': 0.0
         }
-    
+
     finally:
         # Calculate execution time in finally block to ensure it's always calculated
         execution_time = time() - start_time
@@ -239,11 +216,11 @@ def run_scenario(scenario_config: Dict[str, Any], verbose: bool = False) -> Tupl
             env.close()
         except:
             pass  # Ignore cleanup errors
-    
+
     # Final convergence validation - must end with correct prediction and have stable identification
     final_predicted_goal = predicted_goals_history[-1] if predicted_goals_history else None
     final_confidence = max_confidence_history[-1] if max_confidence_history else 0.0
-    
+
     if (final_predicted_goal == goal and final_confidence > 0.5 and first_correct_step != -1):
         success = True
         convergence_step = first_correct_step
@@ -257,18 +234,18 @@ def run_scenario(scenario_config: Dict[str, Any], verbose: bool = False) -> Tupl
                 print(f"      ❌ Lost convergence - identified at step {first_correct_step} but final prediction incorrect")
             else:
                 print(f"      ❌ Never achieved stable correct prediction")
-    
+
     # Calculate visibility statistics
     total_steps = len(visibility_history)
     visible_steps = sum(visibility_history)
     visibility_ratio = visible_steps / total_steps if total_steps > 0 else 0.0
-    
+
     # Count visibility changes (transitions from visible to not visible and vice versa)
     visibility_changes = 0
     for i in range(1, len(visibility_history)):
         if visibility_history[i] != visibility_history[i-1]:
             visibility_changes += 1
-    
+
     # Prepare detailed results with visibility analysis
     results = {
         'success': success,
@@ -285,12 +262,12 @@ def run_scenario(scenario_config: Dict[str, Any], verbose: bool = False) -> Tupl
         'visibility_history': str(visibility_history),  # Store as string
         'max_confidence_reached': max(confidence_history) if confidence_history else 0.0
     }
-    
+
     if verbose:
         print(f"      📊 Execution time: {execution_time:.3f}s")
         if success:
             print(f"      💾 Cache hit rate: {results['cache_stats']['hit_rate']:.1%}")
-    
+
     return success, convergence_step, results
 
 
@@ -305,34 +282,34 @@ def main(dataset_path: Optional[str] = None, verbose: bool = False) -> None:
     if dataset_path is None:
         print("❌ No dataset specified. Use --dataset to provide a CSV file.")
         return
-        
+
     try:
         print(f"📖 Loading dataset: {dataset_path}")
         scenarios_df = pd.read_csv(dataset_path)
         print(f"📊 Found {len(scenarios_df)} scenarios")
-        
+
         # Display dataset summary
         if 'size' in scenarios_df.columns:
             print(f"   Grid sizes: {sorted(scenarios_df['size'].unique())}")
         if 'hidden_cost_style' in scenarios_df.columns:
             print(f"   Behavior styles: {list(scenarios_df['hidden_cost_style'].unique())}")
-        
+
     except FileNotFoundError:
         print(f"❌ Dataset file not found: {dataset_path}")
         return
     except Exception as e:
         print(f"❌ Error loading dataset: {e}")
         return
-    
+
     # Performance tracking
     success_count = 0
     convergence_step_sum = 0
     total_execution_time = 0
     detailed_results = []
-    
+
     print(f"\n🚀 Starting evaluation...")
     evaluation_start_time = time()
-    
+
     for i, (idx, scenario_row) in enumerate(scenarios_df.iterrows()):
         scenario_num = i + 1
         if verbose:
@@ -343,7 +320,7 @@ def main(dataset_path: Optional[str] = None, verbose: bool = False) -> None:
                 print(f"   Size: {scenario_row['size']}x{scenario_row['size']}")
         else:
             print(f"🔍 Scenario {scenario_num}/{len(scenarios_df)}", end=" ")
-        
+
         try:
             # Parse scenario configuration
             scenario_config = {
@@ -351,17 +328,16 @@ def main(dataset_path: Optional[str] = None, verbose: bool = False) -> None:
                 'goals': eval(scenario_row['goals']),
                 'goal': eval(scenario_row['goal']),
                 'hidden_cost': np.array(json.loads(scenario_row['hidden_cost'])),
-                'hidden_cost_type': scenario_row.get('hidden_cost_style', None),
                 'observer_pos': eval(scenario_row['observer_pos']),
                 'target_pos': eval(scenario_row['target_pos']),
                 'observer_dir': scenario_row['observer_dir'],
                 'target_dir': scenario_row['target_dir'],
                 'target_actions': [Action(v) for v in json.loads(scenario_row['all_actions'])]
             }
-            
+
             # Run scenario
             success, convergence_step, results = run_scenario(scenario_config, verbose)
-            
+
             # Update statistics with comprehensive analysis (using eval_ prefix like main_simple.py)
             scenarios_df.loc[idx, 'eval_success'] = success
             scenarios_df.loc[idx, 'eval_convergence_step'] = convergence_step
@@ -373,27 +349,26 @@ def main(dataset_path: Optional[str] = None, verbose: bool = False) -> None:
             scenarios_df.loc[idx, 'visibility_history'] = results.get('visibility_history', '[]')
             scenarios_df.loc[idx, 'final_confidence'] = results.get('final_confidence', 0.0)
             scenarios_df.loc[idx, 'max_confidence_reached'] = results.get('max_confidence_reached', 0.0)
-            
+
             # Store cache statistics
             cache_stats = results.get('cache_stats', {})
             scenarios_df.loc[idx, 'cache_hit_rate'] = cache_stats.get('hit_rate', 0.0)
             scenarios_df.loc[idx, 'cache_hits'] = cache_stats.get('hits', 0)
             scenarios_df.loc[idx, 'cache_misses'] = cache_stats.get('misses', 0)
             scenarios_df.loc[idx, 'cache_size'] = cache_stats.get('size', 0)
-            
+
             if success:
                 success_count += 1
                 convergence_step_sum += convergence_step
-                
+
             total_execution_time += results.get('execution_time', 0)
             detailed_results.append(results)
-            
+
             if not verbose:
                 status = "✅" if success else "❌"
                 print(f"{status}")
-            
+
         except Exception as e:
-            raise e
             print(f"❌ Error processing scenario {scenario_num}: {e}")
             scenarios_df.loc[idx, 'eval_success'] = False
             scenarios_df.loc[idx, 'eval_convergence_step'] = -1
@@ -405,12 +380,12 @@ def main(dataset_path: Optional[str] = None, verbose: bool = False) -> None:
             scenarios_df.loc[idx, 'final_confidence'] = 0.0
             scenarios_df.loc[idx, 'max_confidence_reached'] = 0.0
             continue
-        
+
         # Save partial results every 50 scenarios or at key milestones
         # if scenario_num % 50 == 0 or scenario_num in [100, 200, 300, 400, 500, 600]:
         #     temp_filename = f"evaluation_results_temp_{scenario_num}_{dataset_path.replace('.csv', '').replace('/', '_')}.csv"
         #     scenarios_df.iloc[:scenario_num].to_csv(temp_filename, index=False)
-            
+
         #     # Show current statistics
         #     current_success = scenarios_df.iloc[:scenario_num]['eval_success'].sum()
         #     current_rate = current_success / scenario_num * 100
@@ -419,21 +394,21 @@ def main(dataset_path: Optional[str] = None, verbose: bool = False) -> None:
         #         print(f"    Current success rate: {current_rate:.1f}% ({current_success}/{scenario_num})")
         #     else:
         #         print(f" [Partial: {current_rate:.1f}%]")
-    
+
     total_time = time() - evaluation_start_time
-    
+
     # Calculate and display final statistics
     print(f"\n📊 Evaluation Results:")
     print(f"   Total scenarios: {len(scenarios_df)}")
     print(f"   Successful: {success_count}")
     print(f"   Success rate: {success_count/len(scenarios_df)*100:.1f}%")
-    
+
     if success_count > 0:
         avg_convergence = convergence_step_sum / success_count
         print(f"   Avg convergence step: {avg_convergence:.1f}")
-    
+
     print(f"   Total time: {total_time:.1f}s")
-    
+
     # Execution time statistics
     completed_scenarios = scenarios_df.dropna(subset=['eval_execution_time'])
     if len(completed_scenarios) > 0:
@@ -445,7 +420,7 @@ def main(dataset_path: Optional[str] = None, verbose: bool = False) -> None:
         print(f"   Min: {min_exec_time:.3f}s")
         print(f"   Max: {max_exec_time:.3f}s")
         print(f"   Total evaluation time: {total_execution_time:.1f}s")
-    
+
     # Cache statistics
     cache_scenarios = scenarios_df.dropna(subset=['cache_hit_rate'])
     if len(cache_scenarios) > 0:
@@ -456,7 +431,7 @@ def main(dataset_path: Optional[str] = None, verbose: bool = False) -> None:
         print(f"   Avg hit rate: {avg_cache_hit_rate:.1%}")
         print(f"   Total hits: {int(total_cache_hits)}")
         print(f"   Total misses: {int(total_cache_misses)}")
-    
+
     # Visibility statistics
     visibility_scenarios = scenarios_df.dropna(subset=['visibility_ratio'])
     if len(visibility_scenarios) > 0:
@@ -465,24 +440,24 @@ def main(dataset_path: Optional[str] = None, verbose: bool = False) -> None:
         print(f"\n👁️  Visibility Analysis:")
         print(f"   Avg visibility ratio: {avg_visibility:.1%}")
         print(f"   Avg visibility changes: {avg_changes:.1f}")
-        
+
         # Success vs visibility correlation
         successful_results = visibility_scenarios[visibility_scenarios['eval_success'] == True]
         failed_results = visibility_scenarios[visibility_scenarios['eval_success'] == False]
-        
+
         if len(successful_results) > 0 and len(failed_results) > 0:
             success_visibility = successful_results['visibility_ratio'].mean()
             failed_visibility = failed_results['visibility_ratio'].mean()
             print(f"   Success cases visibility: {success_visibility:.1%}")
             print(f"   Failed cases visibility: {failed_visibility:.1%}")
-            
+
             if success_visibility > failed_visibility:
                 print(f"   ✅ Higher visibility correlates with success")
             else:
                 print(f"   ⚠️ Lower visibility in successful cases (unexpected)")
-    
 
-    
+
+
     # Summary by behavior style (if available)
     if 'hidden_cost_style' in scenarios_df.columns:
         print(f"\n📈 Results by Behavior Style:")
@@ -491,7 +466,7 @@ def main(dataset_path: Optional[str] = None, verbose: bool = False) -> None:
             'eval_convergence_step': 'mean'
         }).round(2)
         print(style_summary)
-    
+
     # Basic statistics grouped by grid size and initial distance
     if 'size' in scenarios_df.columns and 'initial_distance' in scenarios_df.columns:
         print(f"\n📊 Statistics by Grid Size:")
@@ -503,7 +478,7 @@ def main(dataset_path: Optional[str] = None, verbose: bool = False) -> None:
             'final_confidence': 'mean',
             'max_confidence_reached': 'mean'
         }).round(3)
-        
+
         # Flatten column names for better display
         size_summary.columns = ['_'.join(col).strip() for col in size_summary.columns.values]
         size_summary = size_summary.rename(columns={
@@ -519,7 +494,7 @@ def main(dataset_path: Optional[str] = None, verbose: bool = False) -> None:
             'max_confidence_reached_mean': 'avg_max_confidence'
         })
         print(size_summary)
-        
+
         print(f"\n📏 Statistics by Initial Distance:")
         distance_summary = scenarios_df.groupby('initial_distance').agg({
             'eval_success': ['count', 'sum', 'mean'],
@@ -529,7 +504,7 @@ def main(dataset_path: Optional[str] = None, verbose: bool = False) -> None:
             'final_confidence': 'mean',
             'max_confidence_reached': 'mean'
         }).round(3)
-        
+
         # Flatten column names for better display
         distance_summary.columns = ['_'.join(col).strip() for col in distance_summary.columns.values]
         distance_summary = distance_summary.rename(columns={
@@ -545,7 +520,7 @@ def main(dataset_path: Optional[str] = None, verbose: bool = False) -> None:
             'max_confidence_reached_mean': 'avg_max_confidence'
         })
         print(distance_summary)
-        
+
         print(f"\n🎯 Combined Statistics by Grid Size and Initial Distance:")
         combined_summary = scenarios_df.groupby(['size', 'initial_distance']).agg({
             'eval_success': ['count', 'sum', 'mean'],
@@ -554,7 +529,7 @@ def main(dataset_path: Optional[str] = None, verbose: bool = False) -> None:
             'visibility_ratio': 'mean',
             'final_confidence': 'mean'
         }).round(3)
-        
+
         # Flatten column names for better display
         combined_summary.columns = ['_'.join(col).strip() for col in combined_summary.columns.values]
         combined_summary = combined_summary.rename(columns={
@@ -567,13 +542,13 @@ def main(dataset_path: Optional[str] = None, verbose: bool = False) -> None:
             'final_confidence_mean': 'avg_confidence'
         })
         print(combined_summary)
-    
+
     # Add results to dataframe for final save
     dataset_name = dataset_path.split("/")[-1].replace(".csv", "")
     final_output_file = f"rl_only_evaluation_results_training_dataname_{dataset_name}.csv"
     scenarios_df.to_csv(final_output_file, index=False)
     print(f"\n💾 Results saved: {final_output_file}")
-      
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description="Evaluate goal recognition algorithms on generated datasets",
@@ -584,19 +559,19 @@ Examples:
   python main.py --dataset results.csv --verbose
         """
     )
-    
+
     parser.add_argument(
         "--dataset", 
         type=str, 
         required=True,
         help="Path to CSV dataset file generated by generator.py"
     )
-    
+
     parser.add_argument(
         "--verbose", 
         action="store_true",
         help="Print detailed progress information"
     )
-    
+
     args = parser.parse_args()
     main(args.dataset, args.verbose)

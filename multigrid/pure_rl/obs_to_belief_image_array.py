@@ -6,7 +6,7 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_agg import FigureCanvasAgg as FigureCanvas
-IMAGE_SIZE = 64
+IMAGE_SIZE = 124 # for dreamerv3 is 64
 def obs_to_belief_image_array(belief_update_observer, filename, obs, add_noise=False, behavior_type=None):
     """
     Render the environment and save the visualization as an image array.

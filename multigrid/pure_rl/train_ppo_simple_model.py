@@ -14,7 +14,8 @@ from time import sleep
 from ray.rllib.examples.envs.classes.action_mask_env import ActionMaskEnv
 
 
-TRAIN_DATA_PATH = "results_test_new.csv"  # Path to your training dataset CSV
+# TRAIN_DATA_PATH = "results_test_new.csv"  # Path to your training dataset CSV
+TRAIN_DATA_PATH = "results_for_training_neuro_predictor_connected_only_sample_1500.csv"
 import argparse
 def make_env(env_config):
     return ObserverEnvDirectRew(env_config)
@@ -168,7 +169,7 @@ if __name__ == "__main__":
             print("  eval_reward=N/A")
         # Save latest checkpoint every 50 iterations
         if i % 50 == 0:
-            save_dir = os.path.join(os.environ['WORKING_DIR'], f"data/model_data/{TRAIN_DATA_PATH}/ppo_observer_checkpoints")
+            save_dir = os.path.join(os.environ['WORKING_DIR'], f"data/model_data/{TRAIN_DATA_PATH}/latest_ppo_observer_checkpoints")
             os.makedirs(save_dir, exist_ok=True)
             ckpt = algo.save(save_dir)
             print("Latest checkpoint saved to:", ckpt)
@@ -176,7 +177,7 @@ if __name__ == "__main__":
         # Save best checkpoint based on evaluation results
         if eval_reward is not None and eval_reward > best_eval_reward:
             best_eval_reward = eval_reward
-            best_save_dir = os.path.join(os.environ['WORKING_DIR'], f"data/model_data/{TRAIN_DATA_PATH}/ppo_observer_best_checkpoint")
+            best_save_dir = os.path.join(os.environ['WORKING_DIR'], f"data/model_data/{TRAIN_DATA_PATH}/latest_ppo_observer_best_checkpoint")
             os.makedirs(best_save_dir, exist_ok=True)
             best_checkpoint_path = algo.save(best_save_dir)
             print(f"New best checkpoint saved! Eval reward: {eval_reward:.2f} -> {best_checkpoint_path}")

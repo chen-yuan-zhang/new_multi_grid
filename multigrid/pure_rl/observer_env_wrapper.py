@@ -73,7 +73,8 @@ class ObserverEnvDirectRew(gym.Env):
         self._terminated = False
         self._truncated = False
         self._step_idx = 0
-        
+        self._at_least_once_see_in_view = False
+        self.current_scenario_behavior_type = None
 
     # --- Helpers ---
 
@@ -121,6 +122,7 @@ class ObserverEnvDirectRew(gym.Env):
         target_dir   = int(scenario["target_dir"])
         actions      = [Action(v) for v in json.loads(scenario["all_actions"])]
         goal         = eval(scenario["goal"])
+        self.current_scenario_behavior_type = scenario.get("hidden_cost_type", None)
 
         # fresh AGREnv for this episode
         self.env = AGREnv(
@@ -145,7 +147,7 @@ class ObserverEnvDirectRew(gym.Env):
         
         augmented_obs = self.belief_observer.augment_observation(obs)
         
-        belief_img, log_belief_sum = obs_to_belief_image_array(self.belief_observer, None, obs[0])
+        belief_img, log_belief_sum = obs_to_belief_image_array(self.belief_observer, None, obs[0], behavior_type=self.current_scenario_behavior_type)
 
         belief_img = (belief_img.astype(np.float32) / 128.0) - 1.0
 
@@ -157,6 +159,7 @@ class ObserverEnvDirectRew(gym.Env):
         # Initial belief + rewarder reset
         init_belief = augmented_obs[0]['goal_belief']
         info = {}
+        self._at_least_once_see_in_view = False
         return belief_img, info
     
     
@@ -178,9 +181,9 @@ class ObserverEnvDirectRew(gym.Env):
         goal_belief = augmented_obs[0]['goal_belief']
         
         
-        belief_img, log_belief_sum = obs_to_belief_image_array(self.belief_observer, "/home/sukaih/Extrastorage/new_multi_grid_new_rl/multigrid/pure_rl/debug_belief_img.png", next_obs[0], add_noise=False, behavior_type=0)
-        cvt_img = cv2.cvtColor(belief_img, cv2.COLOR_RGB2BGR)
-        cv2.imwrite("/home/sukaih/Extrastorage/new_multi_grid_new_rl/multigrid/pure_rl/debug_belief_img.png", cvt_img)
+        belief_img, log_belief_sum = obs_to_belief_image_array(self.belief_observer, None, next_obs[0], add_noise=False, behavior_type=self.current_scenario_behavior_type)
+        # cvt_img = cv2.cvtColor(belief_img, cv2.COLOR_RGB2BGR)
+        # cv2.imwrite("/home/sukaih/Extrastorage/new_multi_grid_new_rl/multigrid/pure_rl/debug_belief_img.png", cvt_img)
 
 
         belief_img = (belief_img.astype(np.float32) / 128.0) - 1.0
@@ -188,26 +191,54 @@ class ObserverEnvDirectRew(gym.Env):
         
         infos = {}
         
+        # ===== deprecated reward =====
         # Custom reward for observer
         # r_t will be the neg entropy of log_belief_sum and neg entropy of goal_belief, that means, more concentrated belief, more reward
         # rl just reward when in view, otherwise 0 reward
+        # if "target_pos" in next_obs[0] or self.belief_observer.pos == self.env.target.pos:
+        #     r_t = 1.0
+        #     # auxiliary reward if argmax of goal_belief is correct
+        #     goal_max = None 
+        #     goal_belief_val = -1.0
+        #     for g, v in goal_belief.items():
+        #         if v > goal_belief_val:
+        #             goal_belief_val = v
+        #             goal_max = g
+        #     if goal_max == self.env.goal:
+        #         r_t += 1.0
+        # else:
+        #     r_t = 0.0
+        # ============================
+        
+        # Calculate reward
+        goal_max = -1
         if "target_pos" in next_obs[0] or self.belief_observer.pos == self.env.target.pos:
+            if not self._at_least_once_see_in_view:
+                self._at_least_once_see_in_view = True
             r_t = 1.0
-            # auxiliary reward if argmax of goal_belief is correct
-            goal_max = None 
-            goal_belief_val = -1.0
-            for g, v in goal_belief.items():
-                if v > goal_belief_val:
-                    goal_belief_val = v
-                    goal_max = g
-            if goal_max == self.env.goal:
-                r_t += 1.0
         else:
             r_t = 0.0
+        if self._at_least_once_see_in_view:
+            goal_max = max(goal_belief.items(), key=lambda x: x[1])[0]
+
+            # auxiliary rewards -> when agent is confident, also reward
+            goal_prob_max = max(goal_belief.values())
+            if goal_prob_max > 0.66: 
+                if goal_max == self.env.goal:
+                    goal_prob_rew = goal_prob_max - (1/len(goal_belief))
+                    r_t += goal_prob_rew
 
         termination = truncation = self.env.unwrapped.is_done()
         self._terminated = termination
         self._truncated = truncation
+        
+        if termination:
+            if goal_max == self.env.goal:
+                r_t += 5.0 # one-off reward for correct goal identification
+            # Episode is successful if goal was correctly identified
+            episode_success = (goal_max == self.env.goal)
+            self._last_episode_success = episode_success
+            self._at_least_once_see_in_view = False
 
         return belief_img, float(r_t), termination, truncation, infos
 
