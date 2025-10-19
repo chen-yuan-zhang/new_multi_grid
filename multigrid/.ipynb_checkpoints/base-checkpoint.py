@@ -109,7 +109,7 @@ class MultiGridEnv(gym.Env, RandomMixin, ABC):
         failure_termination_mode: Literal['any', 'all'] = 'all',
         render_mode: str | None = None,
         screen_size: int | None = 640,
-        highlight: bool = True,
+        highlight: bool = False,
         tile_size: int = TILE_PIXELS,
         agent_pov: bool = False):
         """
@@ -472,12 +472,14 @@ class MultiGridEnv(gym.Env, RandomMixin, ABC):
                     continue
                 fwd_obj = self.grid.get(*fwd_pos)
                 if agent.state.carrying and (fwd_obj is None or _bool_can_overlap(fwd_obj)):
-                    agent_present = np.bitwise_and.reduce(
-                        self.agent_states.pos == fwd_pos, axis=1).any()
-                    if not agent_present:
-                        self.grid.set(*fwd_pos, agent.state.carrying)
-                        agent.state.carrying.cur_pos = fwd_pos
-                        agent.state.carrying = None
+                    # agent_present = np.bitwise_and.reduce(
+                    #     self.agent_states.pos == fwd_pos, axis=1).any()
+                    # print(agent_present)
+
+                    # if not agent_present:
+                    self.grid.set(*fwd_pos, agent.state.carrying)
+                    agent.state.carrying.cur_pos = fwd_pos
+                    agent.state.carrying = None
 
             # Toggle/activate an object
             elif action == Action.toggle:
@@ -641,7 +643,7 @@ class MultiGridEnv(gym.Env, RandomMixin, ABC):
         top: tuple[int, int] = None,
         size: tuple[int, int] = None,
         reject_fn: Callable[[MultiGridEnv, tuple[int, int]], bool] | None = None,
-        max_tries=math.inf) -> tuple[int, int]:
+        max_tries=100) -> tuple[int, int]:
         """
         Place an object at an empty position in the grid.
 

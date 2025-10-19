@@ -5,7 +5,7 @@ from .gr_pursuer.agents.obs import Observer
 
 import multigrid.envs
 
-env = AGRlocked(render_mode='human')
+env = AGRlocked(render_mode='human',num_goals = 2)
 observations, infos = env.reset()
 TargetAgent = LockTarget(env)
 ObserverAgent = Observer(env)
@@ -14,7 +14,7 @@ while not env.unwrapped.is_done():
    # this is where you would insert your policy / policies
     actions = {agent.index: agent.action_space.sample() for agent in env.unwrapped.agents}
     actions[1] = TargetAgent.compute_action(observations)
-    actions[0] = ObserverAgent.compute_action(observations[0])
+    actions[0] = 0
 
     print(actions)
     observations, rewards, terminations, truncations, infos = env.step(actions)

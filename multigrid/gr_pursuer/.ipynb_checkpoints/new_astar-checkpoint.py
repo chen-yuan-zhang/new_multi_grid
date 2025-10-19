@@ -56,7 +56,7 @@ def get_path(label):
 
 def astar(pos_state, target, env, cost = None, heuristic=heuristic_manhattan, max_iter=None):
 
-    print(pos_state,target)
+    #print(pos_state,target)
     target = Tile(*target)
     pos, dir = pos_state
     next = create_root_label(((pos[0], pos[1]), dir), target, heuristic)
@@ -72,7 +72,7 @@ def astar(pos_state, target, env, cost = None, heuristic=heuristic_manhattan, ma
         #print(current.pos_state[0])
         if current.pos_state[0][0] == target.i and current.pos_state[0][1] == target.j:
             found = current
-            print("Goal Found!")
+            #print("Goal Found!")
             break
 
         
@@ -112,7 +112,14 @@ def astar(pos_state, target, env, cost = None, heuristic=heuristic_manhattan, ma
     return None
 
 
-def execute_action(pos_state, action, env):
+def _is_wall(obj):
+    return obj is not None and getattr(obj, "type", None) == "wall"
+
+
+def _is_closed_door(obj):
+    return (obj is not None) and hasattr(obj, "is_open") and (not obj.is_open)
+    
+def execute_action(pos_state, action, env,version = None):
     """
     Execute an action in the environment.
     
@@ -134,25 +141,36 @@ def execute_action(pos_state, action, env):
     if action == Action.right:
         dir = (dir + 1) % 4
         return True, (pos, dir)
-
+        
     if action == Action.forward:
         dx, dy = DIR_TO_VEC[dir]
         new_pos = (pos[0] + dx, pos[1] + dy)
         # bounds
         if not (0 <= new_pos[0] < env.width and 0 <= new_pos[1] < env.height):
             return False, (pos, dir)
+        
+        # everything except walls and CLOSED doors is walkable
+        obj = env.grid.get(*new_pos)
         # walls block movement
-        if env.base_grid[new_pos[0], new_pos[1]] == 2: # wall = 2
-            return False, (pos, dir)
-        obj = env.grid.get(new_pos[0], new_pos[1])
-        if obj is not None and obj.type == "door":
-            if not obj.is_open:
+        if version == None:
+            if _is_wall(obj):
                 return False, (pos, dir)
+        if _is_closed_door(obj):
+            return False, (pos, dir)
         # open door / empty / key / box / etc. -> pass
         return True, (new_pos, dir)
     
+    if action == Action.drop and (env.agents[1].state._carried_obj is not None):
+        dx, dy = DIR_TO_VEC[dir]
+        new_pos = (pos[0] + dx, pos[1] + dy)
+        if 0 <= new_pos[0] < env.width and 0 <= new_pos[1] < env.height and (env.grid.get(*new_pos) is not None):
+            return True, (pos, dir)
+
+
     if action == Action.stay:
         return True, (pos, dir)
+        
+    return False, (pos, dir) # If the agent hits a wall, return the current state
     
 
 def execute_reverse_action(pos_state, action, env):
@@ -181,10 +199,18 @@ def execute_reverse_action(pos_state, action, env):
     if action == Action.forward:
         dx, dy = DIR_TO_VEC[dir]
         new_pos = (pos[0] - dx, pos[1] - dy)
-        if 0 <= new_pos[0] < env.width and 0 <= new_pos[1] < env.height and env.base_grid[new_pos[0], new_pos[1]] != 2:
-            return True, (new_pos, dir)
+        # bounds
+        if not (0 <= new_pos[0] < env.width and 0 <= new_pos[1] < env.height):
+            return False, (pos, dir)
         
-        return False, (pos, dir) # If the agent hits a wall, return the current state
+        # everything except walls and CLOSED doors is walkable
+        obj = env.grid.get(*new_pos)
+        # walls block movement
+        if _is_wall(obj):
+            return False, (pos, dir)
+
+        # open door / empty / key / box / etc. -> pass
+        return True, (new_pos, dir)
     
     if action == Action.stay:
         return True, (pos, dir)

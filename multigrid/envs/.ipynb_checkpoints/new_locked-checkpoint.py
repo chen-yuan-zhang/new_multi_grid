@@ -4,7 +4,7 @@ from typing import Literal,Dict, Tuple, List, Optional, Set, Any
 from multigrid import MultiGridEnv
 from multigrid.core import Grid
 from multigrid.core.constants import Direction, Type, IDX_TO_COLOR,Color
-from multigrid.core.world_object import Goal, Wall, Door, Key
+from multigrid.core.world_object import Goal, Wall, Door, Key,WorldObj
 from multigrid.core.actions import Action
 from multigrid.core.mission import MissionSpace
 from multigrid.core.roomgrid import Room, RoomGrid
@@ -13,6 +13,9 @@ import numpy as np
 import random
 from math import ceil
 from collections import deque, defaultdict
+import heapq
+from itertools import count
+
 
 
 
@@ -74,98 +77,272 @@ def _initial_open_mask(abs_graph) -> int:
             mask |= (1 << eid)
     return mask
 
-# —— 单目标：单钥匙 + 持久开门 —— #
-def _plan_onekey_persist_open(abs_graph, start_rid, goal_rid, held = None):
+def _manhattan(a: Tuple[int,int], b: Tuple[int,int]) -> int:
+    return abs(a[0]-b[0]) + abs(a[1]-b[1])
+
+def _heuristic(abs_graph: Dict, rid: Any, goal_xy: Optional[Tuple[int,int]]) -> int:
+    """
+    启发式函数：直接使用当前房间的 pos['value'] 与目标坐标的曼哈顿距离。
+    """
+    if goal_xy is None:
+        return 0
+
+    # 从 abs_graph 中找到当前房间的坐标
+    rooms = abs_graph["rooms"]
+    rinfo = rooms.get(rid, {})
+
+    # 取 pos.value 作为房间代表坐标
+    if "pos" in rinfo and isinstance(rinfo["pos"], dict) and "value" in rinfo["pos"]:
+        room_xy = rinfo["pos"]["value"]
+    else:
+        # 若没有 pos.value，则启发式退化为 0
+        return 0
+
+    gx, gy = goal_xy
+    rx, ry = room_xy
+    return abs(rx - gx) + abs(ry - gy)
+
+# def _plan_onekey_persist_open(
+#     abs_graph,
+#     start_rid,
+#     goal_rid,
+#     held=None,
+#     open_mask=None,
+#     goal=None,
+#     max_expansions=500000
+# ):
+#     """
+#     返回：events（按时间顺序）
+#     events 元素两类：
+#       1) {'type':'pickup', 'room': rid, 'key': 'red',
+#           'pos': {'type':'xy','value':(x,y)}|{'type':None,'value':None}}
+#       2) {'type':'open',   'eid': eid, 'color':'red',
+#           'from': u, 'to': v, 'pos': {...}}
+#     若不可达：返回 None
+#     """
+#     rooms = abs_graph["rooms"]
+#     adj = _build_neighbors(abs_graph)
+
+#     if held is not None and hasattr(held, "color"):
+#         held = held.color
+
+#     if open_mask is None:
+#         open_mask = _initial_open_mask(abs_graph)
+
+#     start_state = (start_rid, held, open_mask)
+#     q = deque([start_state])
+
+#     prev = {start_state: None}
+#     prev_evt: Dict[Tuple[Any, Optional[Any], int], Dict[str, Any]] = {}
+#     expansions = 0
+
+#     while q:
+#         rid, held, open_mask = q.popleft()
+#         expansions += 1
+
+#         # 扩展上限保护
+#         if (max_expansions is not None) and (expansions > max_expansions):
+#             return []  # 触发扩展上限，放弃
+
+#         # 命中目标
+#         if rid == goal_rid:
+#             # 回溯事件路径
+#             path_events: List[Dict[str, Any]] = []
+#             cur = (rid, held, open_mask)
+#             while prev[cur] is not None:
+#                 evt = prev_evt.get(cur)
+#                 if evt:
+#                     path_events.append(evt)
+#                 cur = prev[cur]
+#             path_events.reverse()
+
+#             if goal is not None:
+#                 path_events.append({
+#                     "type": "move",
+#                     "room": goal_rid,
+#                     "pos": {"type": "xy", "value": goal}
+#                 })
+
+#             return path_events
+
+#         # ---- 先移动（可能开门） ----
+#         for nb, col, eid in adj[rid]:
+#             ccol = _canon(col)
+#             opened = (open_mask >> eid) & 1
+
+#             if opened or ccol is None or ccol == _canon(held):
+#                 next_open = open_mask
+#                 evt = None
+
+#                 # 若此门未开但颜色匹配当前钥匙 → 开门事件
+#                 if (not opened) and (ccol is not None) and (ccol == _canon(held)):
+#                     next_open |= (1 << eid)
+#                     pos_info = _edge_position(abs_graph, eid)
+#                     evt = {
+#                         "type": "open",
+#                         "eid": eid,
+#                         "color": ccol,
+#                         "from": rid,
+#                         "to": nb,
+#                         "pos": pos_info
+#                     }
+
+#                 ns = (nb, held, next_open)
+#                 if ns not in prev:
+#                     prev[ns] = (rid, held, open_mask)
+#                     prev_evt[ns] = evt
+#                     q.append(ns)
+
+#         # ---- 在当前房间拿/换钥匙（零代价扩展） ----
+#         room_keys = _iter_room_keys(rooms[rid])
+#         if room_keys:
+#             if held is None:
+#                 for kcolor, kraw in room_keys:
+#                     ns = (rid, kcolor, open_mask)
+#                     if ns not in prev:
+#                         prev[ns] = (rid, held, open_mask)
+#                         kpos_type, kpos_val = _key_position(kraw)
+#                         prev_evt[ns] = {
+#                             "type": "pickup",
+#                             "room": rid,
+#                             "key": kcolor,
+#                             "pos": {"type": kpos_type, "value": kpos_val}
+#                         }
+#                         q.append(ns)
+#             else:
+#                 for kcolor, kraw in room_keys:
+#                     if kcolor != _canon(held):
+#                         ns = (rid, kcolor, open_mask)
+#                         if ns not in prev:
+#                             prev[ns] = (rid, held, open_mask)
+#                             kpos_type, kpos_val = _key_position(kraw)
+#                             prev_evt[ns] = {
+#                                 "type": "pickup",
+#                                 "room": rid,
+#                                 "key": kcolor,  # 换到的新钥匙
+#                                 "pos": {"type": kpos_type, "value": kpos_val}
+#                             }
+#                             q.append(ns)
+
+#     return []
+
+def _plan_onekey_persist_open(abs_graph, start_rid, goal_rid,
+                              held=None, open_mask=None, goal=None,
+                              max_expansions=500000, pickup_cost=1):
     """
     返回：events（按时间顺序）
-    events 元素两类：
-      1) {'type':'pickup', 'room': rid, 'key': 'red', 'pos': {'type':'xy','value':(x,y)}|{'type':None,'value':None}}
-      2) {'type':'open',   'eid': eid, 'color':'red',
-          'from': u, 'to': v, 'pos': {...}}
-    若不可达：返回 None
+      pickup: {'type':'pickup','room':rid,'key':color,'pos':{...}}
+      open:   {'type':'open','eid':eid,'color':color,'from':u,'to':v,'pos':{...}}
+      move:   {'type':'move','room':goal_rid,'pos':{'type':'xy','value':goal}}
+    不可达：返回 []
     """
     rooms = abs_graph["rooms"]
     adj   = _build_neighbors(abs_graph)
 
-    start_state = (start_rid, held, _initial_open_mask(abs_graph))
-    q = deque([start_state])
+    # 规范 held
+    if held is not None and hasattr(held, "color"):
+        held = held.color
 
-    prev  = {start_state: None}
-    prev_evt: Dict[Tuple[Any, Optional[Any], int], Dict[str, Any]] = {}
 
-    while q:
-        rid, held, open_mask = q.popleft()
+    if open_mask is None:
+        open_mask = _initial_open_mask(abs_graph)
+
+    start_state = (start_rid, held, open_mask)
+
+    # PQ 元素结构：(f, g, h, tie, rid, held, open_mask)
+    pq = []
+    tie_counter = count()
+
+    g_cost: Dict[Tuple[Any, Optional[str], int], float] = {start_state: 0.0}
+    prev: Dict[Tuple[Any, Optional[str], int], Optional[Tuple[Any, Optional[str], int]]] = {start_state: None}
+    prev_evt: Dict[Tuple[Any, Optional[str], int], Optional[Dict[str, Any]]] = {}
+
+    h0 = _heuristic(abs_graph, start_rid, goal)  # 必须是数字
+    heapq.heappush(pq, (h0 + 0, 0, h0, next(tie_counter), start_rid, held, open_mask))
+
+    expansions = 0
+    while pq:
+        f, g, h, _, rid, held, open_mask = heapq.heappop(pq)
+        state = (rid, held, open_mask)
+
+        # 过期条目跳过
+        if g_cost.get(state, float("inf")) < g:
+            continue
+
+        expansions += 1
+        if (max_expansions is not None) and (expansions > max_expansions):
+            return []
+
+        # 命中目标
         if rid == goal_rid:
-            # 回溯事件
             path_events: List[Dict[str, Any]] = []
-            cur = (rid, held, open_mask)
-            #print(held, _canon(held))
+            cur = state
             while prev[cur] is not None:
                 evt = prev_evt.get(cur)
                 if evt:
                     path_events.append(evt)
                 cur = prev[cur]
             path_events.reverse()
+            if goal is not None:
+                path_events.append({"type":"move","room":goal_rid,"pos":{"type":"xy","value":goal}})
             return path_events
 
-        # ---- 先移动（可能开门） ----
+        # ---- 1) 跨房间移动（代价 1）----
         for nb, col, eid in adj[rid]:
             ccol = _canon(col)
             opened = (open_mask >> eid) & 1
-
             if opened or ccol is None or ccol == _canon(held):
                 next_open = open_mask
                 evt = None
                 if (not opened) and (ccol is not None) and (ccol == _canon(held)):
                     next_open |= (1 << eid)
                     pos_info = _edge_position(abs_graph, eid)
-                    evt = {
-                        "type":  "open",
-                        "eid":   eid,
-                        "color": ccol,
-                        "from":  rid,
-                        "to":    nb,
-                        "pos":   pos_info
-                    }
+                    evt = {"type":"open","eid":eid,"color":ccol,"from":rid,"to":nb,"pos":pos_info}
 
                 ns = (nb, held, next_open)
-                if ns not in prev:
-                    prev[ns] = (rid, held, open_mask)
+                new_g = g + 1
+                if new_g < g_cost.get(ns, float("inf")):
+                    g_cost[ns] = new_g
+                    prev[ns] = state
                     prev_evt[ns] = evt
-                    q.append(ns)
-
-        # ---- 在当前房间拿/换钥匙（零代价扩展） ----
+                    nh = _heuristic(abs_graph, nb, goal)
+                    heapq.heappush(pq, (new_g + nh, new_g, nh, next(tie_counter), nb, held, next_open))
+        # ---- 2) 拾取 / 换钥匙（代价 pickup_cost）----
         room_keys = _iter_room_keys(rooms[rid])
         if room_keys:
             if held is None:
                 for kcolor, kraw in room_keys:
                     ns = (rid, kcolor, open_mask)
-                    if ns not in prev:
-                        prev[ns] = (rid, held, open_mask)
+                    new_g = g + pickup_cost
+                    if new_g < g_cost.get(ns, float("inf")):
+                        g_cost[ns] = new_g
+                        prev[ns] = state
                         kpos_type, kpos_val = _key_position(kraw)
                         prev_evt[ns] = {
-                            "type": "pickup",
-                            "room": rid,
-                            "key":  kcolor,
-                            "pos":  {"type": kpos_type, "value": kpos_val}
+                            "type":"pickup","room":rid,"key":kcolor,
+                            "pos":{"type":kpos_type,"value":kpos_val}
                         }
-                        q.append(ns)
+                        nh = _heuristic(abs_graph, rid, goal)
+                        heapq.heappush(pq, (new_g + nh, new_g, nh, next(tie_counter), rid, kcolor, open_mask))
             else:
                 for kcolor, kraw in room_keys:
                     if kcolor != _canon(held):
                         ns = (rid, kcolor, open_mask)
-                        if ns not in prev:
-                            prev[ns] = (rid, held, open_mask)
+                        new_g = g + pickup_cost
+                        if new_g < g_cost.get(ns, float("inf")):
+                            g_cost[ns] = new_g
+                            prev[ns] = state
                             kpos_type, kpos_val = _key_position(kraw)
                             prev_evt[ns] = {
-                                "type": "pickup",
-                                "room": rid,
-                                "key":  kcolor,  # 换到的新钥匙
-                                "pos":  {"type": kpos_type, "value": kpos_val}
+                                "type":"pickup","room":rid,"key":kcolor,
+                                "pos":{"type":kpos_type,"value":kpos_val}
                             }
-                            q.append(ns)
+                            nh = _heuristic(abs_graph, rid, goal)
+                            heapq.heappush(pq, (new_g + nh, new_g, nh, next(tie_counter), rid, kcolor, open_mask))
 
-    return None
+    # 未找到路径
+    return []
+
 
 # —— 批量：从走廊到所有房间（返回事件序列）—— #
 def plan_all_from_hall(abs_graph, hall_id=("HALL",)):
@@ -299,11 +476,12 @@ class AGRlocked(RoomGrid):
         room_size: int = 5,
         max_hallway_keys: int = 1,
         max_keys_per_room: int = 2,
-        num_rows: int = 3,
+        num_rows: int = 2,
         num_cols: int = 3,
 
         
         base_grid: np.ndarray | None = None,
+        base_rooms: np.ndarray | None = None,
         num_goals: int | None = 3,
         goals: list[tuple[int, int]] | None = None,
         goal: tuple[int, int] | None = None,
@@ -351,7 +529,7 @@ class AGRlocked(RoomGrid):
         """
 
         if base_grid is not None:
-            assert base_grid.shape[0] == base_grid.shape[1], "base_grid must be square"
+            #assert base_grid.shape[0] == base_grid.shape[1], "base_grid must be square"
             size = base_grid.shape[0]
 
         assert room_size >= 4
@@ -367,6 +545,7 @@ class AGRlocked(RoomGrid):
         self.agents_start_pos = agents_start_pos
         self.agents_start_dir = agents_start_dir
         self.base_grid = base_grid
+        self.base_rooms = base_rooms
         self.num_goals = num_goals
         self.initial_distance = initial_distance
         self.enable_hidden_cost = enable_hidden_cost
@@ -391,7 +570,7 @@ class AGRlocked(RoomGrid):
         self.width = width
         
         super().__init__(
-            mission_space="predicte the goal of the actor",
+            mission_space="",
             agents=2,
             agent_view_size=[5, 5],
             see_through_walls=[False, False],
@@ -412,16 +591,19 @@ class AGRlocked(RoomGrid):
         """
         Reset the environment
         """              
-        self._gen_grid(self.width,self.height)
+        if self.base_grid is not None:
+            self.load_from_base_grid(self.base_grid,self.base_rooms)
+        else:
+            self._gen_grid(self.width,self.height)
         for agent in self.agents:
             agent.state.terminated = False
-
         self.step_count = 0
         observation = self.gen_obs()
         obs = self.mod_obs(observation)
         # Add initial information of this episode
         infos = {
             'base_grid': self.base_grid,
+            'base_rooms': self.base_rooms,
             'initial_distance': self.initial_distance,
             'enable_hidden_cost': self.enable_hidden_cost,
             'hidden_cost': self.hidden_cost,
@@ -558,36 +740,55 @@ class AGRlocked(RoomGrid):
     
     def export_grid_numpy(self) -> np.ndarray:
         """
-        Export current grid to a numpy array encoded by Type enum order:
-          unseen=0, empty=1, wall=2, floor=3,
-          door=4, key=5, ball=6, box=7,
-          goal=8, lava=9, agent=10
-        """
-        type_to_idx = {t: i for i, t in enumerate(Type)}
-        H, W = self.height, self.width
-        arr = np.zeros((W,H), dtype=np.int8)
+        Export current grid to numpy array in the official format:
+          array[x, y, :] = (type_idx, color_idx, state)
     
-        for y in range(H):
-            for x in range(W):
+        Where:
+          - type_idx: Type enum index
+          - color_idx: Color enum index (0 if not applicable)
+          - state: integer encoding (e.g., 0=default, 1=closed, 2=locked, etc.)
+        """
+        W, H = self.width, self.height
+        arr = np.zeros((W, H, WorldObj.dim), dtype=np.int8)
+    
+        type_to_idx = {t: i for i, t in enumerate(Type)}
+        color_to_idx = {c: i for i, c in enumerate(Color)}  # 假设你有 Color enum
+    
+        for x in range(W):
+            for y in range(H):
                 obj = self.grid.get(x, y)
                 if obj is None:
-                    arr[x, y] = type_to_idx[Type.empty]
+                    arr[x, y, WorldObj.TYPE] = type_to_idx[Type.empty]
+                    arr[x, y, WorldObj.COLOR] = 0
+                    arr[x, y, WorldObj.STATE] = 0
+                    continue
+    
+                # type
+                t = getattr(obj, "type", None)
+                if t is None:
+                    t = Type.unseen
+                arr[x, y, WorldObj.TYPE] = type_to_idx[t]
+    
+                # color
+                if hasattr(obj, "color") and obj.color is not None:
+                    arr[x, y, WorldObj.COLOR] = color_to_idx[obj.color]
                 else:
-                    t = getattr(obj, "type", None)
-                    if t is None:
-                        # fallback by class name
-                        name = obj.__class__.__name__.lower()
-                        if "wall" in name:
-                            t = Type.wall
-                        elif "door" in name:
-                            t = Type.door
-                        elif "key" in name:
-                            t = Type.key
-                        elif "agent" in name:
-                            t = Type.agent
-                        else:
-                            t = Type.unseen
-                    arr[x, y] = type_to_idx[t]
+                    arr[x, y, WorldObj.COLOR] = 0
+    
+                # state
+                s = 0
+                if hasattr(obj, "state"):
+                    if isinstance(obj.state, str):
+                        if obj.state == "open":
+                            s = 0
+                        elif obj.state == "closed":
+                            s = 1
+                        elif obj.state == "locked":
+                            s = 2
+                    else:
+                        s = int(obj.state)
+                arr[x, y, WorldObj.STATE] = s
+    
         return arr
     
     # --- helpers ---------------------------------------------------------------
@@ -670,24 +871,26 @@ class AGRlocked(RoomGrid):
     
     def _gen_grid(self, width, height):
         # 0) base grid & hallway column
+        print(" 0) base grid & hallway column")
         self.base_gen_grid(width, height)
         HALLWAY_COL = getattr(self, "hallway_col", self.num_cols // 2)
         self.hallway_col = HALLWAY_COL
         self._abs_init(HALLWAY_COL)
 
-    
         # keep hallway vertical openings
         if HALLWAY_COL is not None:
             for r in range(self.num_rows - 1):
                 self.remove_wall(HALLWAY_COL, r, Direction.down)
     
         # 1) Prepare door colors
+        print("# 1) Prepare door colors")
         approx_doors = (self.num_rows * (self.num_cols - 1)) + ((self.num_rows - 1) * self.num_cols)
         color_seq = list(Color)
         color_seq = (color_seq * ((approx_doors // len(color_seq)) + 1))[:approx_doors]
         color_seq = self._rand_perm(color_seq)
     
         # 2) Place doors & register edges (with positions) on abstract graph
+        print("# 2) Place doors & register edges (with positions) on abstract graph")
         used_colors = []
         ci = 0
         for r in range(self.num_rows):
@@ -712,14 +915,15 @@ class AGRlocked(RoomGrid):
                     u = self._map_rid(c, r, HALLWAY_COL)
                     v = self._map_rid(c, r + 1, HALLWAY_COL)
                     self._abs_add_edge(u, v, colr, locked=True, pos=dpos)
-    
+                    
+        used_colors = list(set(used_colors)) #+ list(set(used_colors))
         # 3) Place keys (hallway first, then rooms) & register on abstract graph with positions
+        print("# 3) Place keys (hallway first, then rooms) & register on abstract graph with positions")
         rooms_flat_ids = [(c, r) for r in range(self.num_rows) for c in range(self.num_cols)]
         random.shuffle(rooms_flat_ids)
-        
         if HALLWAY_COL is not None and used_colors:
             max_hall_keys = getattr(self, "max_hallway_keys", 3)
-            num_hall_keys = min(self._rand_int(1, max_hall_keys + 1), len(used_colors))
+            num_hall_keys = min(self._rand_int(1, max_hall_keys + 1), 3)
             for k in range(num_hall_keys):
                 hall_row  = self._rand_int(0, self.num_rows)
                 hall_room = self.get_room(HALLWAY_COL, hall_row)
@@ -730,8 +934,6 @@ class AGRlocked(RoomGrid):
                 if kpos is None:
                     continue  # 极端情况下跳过或记录 warning
                 rid_xy = self._rid_from_xy(kpos[0], kpos[1], HALLWAY_COL)
-                if rid_xy is None:
-                    rid_xy = self._map_rid(HALLWAY_COL, hall_row, HALLWAY_COL)  # 兜底
                 self._abs_add_key(rid_xy, key_color, kpos)
         
         # 3) remaining keys —— 同样用坐标反查 rid
@@ -744,13 +946,20 @@ class AGRlocked(RoomGrid):
             if kpos is None:
                 continue
             rid_xy = self._rid_from_xy(kpos[0], kpos[1], HALLWAY_COL)
-            if rid_xy is None:
-                rid_xy = self._map_rid(c, r, HALLWAY_COL)  # 兜底
             self._abs_add_key(rid_xy, key_color, kpos)
 
         # 4) Snapshot base grid
+        print("# 4) Snapshot base grid")
         self.base_grid = self.export_grid_numpy()
-    
+        # 2) 保存房间信息
+        self.base_rooms = [
+            [(room.top, room.size) for room in row]
+            for row in self.room_grid]
+        # 3) 保存 hallway 列
+        self.base_hallway_col = self.hallway_col
+
+        print("# 5) Place two agents: one random room; the other in hallway (if exists) else another random room")
+        
         # 5) Place two agents: one random room; the other in hallway (if exists) else another random room
         rooms_flat = [self.get_room(c, r) for r in range(self.num_rows) for c in range(self.num_cols)]
         room_for_agent = self._rand_elem(rooms_flat)
@@ -760,8 +969,12 @@ class AGRlocked(RoomGrid):
             hall_top = self.get_room(HALLWAY_COL, 0).top
             hall_size = (self.get_room(HALLWAY_COL, 0).size[0], self.height)
             MultiGridEnv.place_agent(self, self.agents[1], top=hall_top, size=hall_size)
+            MultiGridEnv.place_agent(self, self.agents[0], top=hall_top, size=hall_size)
 
-        self.place_agent_near(self.agents[0],init_step = self.agents[1].state.pos,max_dist = self.initial_distance)
+        self.agents_start_pos = [self.agents[0].state.pos,self.agents[1].state.pos]
+        self.agents_start_dir = [int(self.agents[0].state.dir),int(self.agents[1].state.dir)]
+            
+        #self.place_agent_near(self.agents[0],init_step = self.agents[1].state.pos,max_dist = self.initial_distance)
         # else:
         #     another_room = self._rand_elem(rooms_flat)
         #     MultiGridEnv.place_agent(self, self.agents[1], top=another_room.top, size=another_room.size)
@@ -770,14 +983,7 @@ class AGRlocked(RoomGrid):
         self._gen_goals(self.num_goals)
         room = self._rid_from_xy(self.goal[0], self.goal[1], HALLWAY_COL)
         self.goal_room = room
-        # # 7) Debug prints
-        # print(f"[ABS] rooms={len(self.abs['rooms'])}, edges={len(self.abs['edges'])}")
-        # for rid, meta in self.abs["rooms"].items():
-        #     print(rid, meta)
-    
-        self.plans = plan_all_from_hall(self.abs, hall_id=("HALL",))
-        # for rid, acts in plans.items():
-        #     print_plan(rid, acts)
+
 
 
     def mod_obs(self, obs):
@@ -805,7 +1011,6 @@ class AGRlocked(RoomGrid):
     ) -> tuple[int, int]:
         agent.state.pos = (-1, -1)
         h, w = self.grid.height, self.grid.width
-    
         for _ in range(max_tries):
             r = self._rand_int(0, h)
             c = self._rand_int(0, w)
@@ -859,111 +1064,114 @@ class AGRlocked(RoomGrid):
             agent.state.terminated = True # terminate this agent only
             terminations[agent.index] = True
 
-
-    # def _gen_grid(self, width, height):
-    #     # 0) base grid & hallway column
-    #     self.base_gen_grid(width, height)
-    #     HALLWAY_COL = 1 if getattr(self, "num_cols", 3) >= 3 else None
-    #     self._abs_init(HALLWAY_COL)
+    def load_from_base_grid(self, base_grid, base_rooms, *, place_agents=True, place_goals=True):
+        """
+        从 base_grid（#4 时刻的快照）重建地图与抽象图：
+          1) 重建 self.grid（先尝试 Grid.decode，失败则手动逐格 decode）
+          2) 重建抽象图：rooms/edges/keys（含 door.locked 状态）
+          3) 可选：重新放置 agents 与 goals
+        """
+        # 1) Decode 成 grid
+        W, H = base_grid.shape[:2]
+        self.width = W
+        self.height = H
+        self.grid, vis_mask = Grid.decode(base_grid)
+        print("[Loader] Decoded by Grid.decode()")
     
-    #     # keep hallway vertical openings
-    #     if HALLWAY_COL is not None:
-    #         for r in range(self.num_rows - 1):
-    #             self.remove_wall(HALLWAY_COL, r, Direction.down)
-    
-    #     # 1) Prepare door colors
-    #     approx_doors = (self.num_rows * (self.num_cols - 1)) + ((self.num_rows - 1) * self.num_cols)
-    #     color_seq = list(Color)
-    #     color_seq = (color_seq * ((approx_doors // len(color_seq)) + 1))[:approx_doors]
-    #     color_seq = self._rand_perm(color_seq)
-    
-    #     # 2) Place doors & register edges (with positions) on abstract graph
-    #     used_colors = []
-    #     ci = 0
-    #     for r in range(self.num_rows):
-    #         for c in range(self.num_cols):
-    #             # right door: (c,r) <-> (c+1,r)
-    #             if c < self.num_cols - 1:
-    #                 colr = color_seq[ci]; ci += 1
-    #                 # compute door position BEFORE/AFTER placing (deterministic anyway)
-    #                 self.add_door(c, r, dir=Direction.right, color=colr, locked=True, rand_pos=False)
-    #                 dpos = self._door_xy(c, r, Direction.right)
-    #                 used_colors.append(colr)
-    #                 u = self._map_rid(c, r, HALLWAY_COL)
-    #                 v = self._map_rid(c + 1, r, HALLWAY_COL)
-    #                 self._abs_add_edge(u, v, colr, locked=True, pos=dpos)
-    
-    #             # down door: (c,r) <-> (c,r+1) but skip hallway column
-    #             if r < self.num_rows - 1 and c != HALLWAY_COL:
-    #                 colr = color_seq[ci]; ci += 1
-    #                 self.add_door(c, r, dir=Direction.down, color=colr, locked=True, rand_pos=False)
-    #                 dpos = self._door_xy(c, r, Direction.down)
-    #                 used_colors.append(colr)
-    #                 u = self._map_rid(c, r, HALLWAY_COL)
-    #                 v = self._map_rid(c, r + 1, HALLWAY_COL)
-    #                 self._abs_add_edge(u, v, colr, locked=True, pos=dpos)
-    
-    #     # 3) Place keys (hallway first, then rooms) & register on abstract graph with positions
-    #     rooms_flat_ids = [(c, r) for r in range(self.num_rows) for c in range(self.num_cols)]
-    #     random.shuffle(rooms_flat_ids)
+        # 2) 重新初始化房间 grid 和抽象图
+        HALLWAY_COL = getattr(self, "hallway_col", self.num_cols // 2)
+        self.hallway_col = HALLWAY_COL
+        self.restore_room_grid_from_tuples(base_rooms)
         
-    #     if HALLWAY_COL is not None and used_colors:
-    #         max_hall_keys = getattr(self, "max_hallway_keys", 3)
-    #         num_hall_keys = min(self._rand_int(1, max_hall_keys + 1), len(used_colors))
-    #         for k in range(num_hall_keys):
-    #             hall_row  = self._rand_int(0, self.num_rows)
-    #             hall_room = self.get_room(HALLWAY_COL, hall_row)
-    #             key_color = used_colors[k]
-    #             key_obj   = Key(color=key_color)
-    #             self.place_obj(key_obj, top=hall_room.top, size=hall_room.size)
-    #             kpos = getattr(key_obj, "init_pos", getattr(key_obj, "cur_pos", None))
-    #             if kpos is None:
-    #                 continue  # 极端情况下跳过或记录 warning
-    #             rid_xy = self._rid_from_xy(kpos[0], kpos[1], HALLWAY_COL)
-    #             if rid_xy is None:
-    #                 rid_xy = self._map_rid(HALLWAY_COL, hall_row, HALLWAY_COL)  # 兜底
-    #             self._abs_add_key(rid_xy, key_color, kpos)
-        
-    #     # 3) remaining keys —— 同样用坐标反查 rid
-    #     for key_color in used_colors[num_hall_keys:]:
-    #         c, r   = self._rand_elem(rooms_flat_ids)
-    #         room   = self.get_room(c, r)
-    #         key_obj = Key(color=key_color)
-    #         self.place_obj(key_obj, top=room.top, size=room.size)
-    #         kpos = getattr(key_obj, "init_pos", getattr(key_obj, "cur_pos", None))
-    #         if kpos is None:
-    #             continue
-    #         rid_xy = self._rid_from_xy(kpos[0], kpos[1], HALLWAY_COL)
-    #         if rid_xy is None:
-    #             rid_xy = self._map_rid(c, r, HALLWAY_COL)  # 兜底
-    #         self._abs_add_key(rid_xy, key_color, kpos)
+        # ---------- 3) 重建抽象图 ----------
+        # 说明：你之前在 _gen_grid() 里调用了 self._abs_init(HALLWAY_COL)
+        # 此处从快照恢复，需要重新 init + 扫描门与钥匙把 edges/keys 注回去
+        self._abs_init(HALLWAY_COL)
+    
+        # 3.1 清空各房间的 key 列表
+        for room in self.abs["rooms"]:
+            self.abs["rooms"][room]["keys"] = []
+        self.abs["edges"] = []
+        # 3.2 全图扫描：登记钥匙位置
+        for x in range(self.width):
+            for y in range(self.height):
+                obj = self.grid.get(x, y)
+                if obj and getattr(obj, "type", None) == "key":
+                    rid_xy = self._rid_from_xy(x, y, HALLWAY_COL)
+                    self._abs_add_key(rid_xy, obj.color, (x, y))
 
-    #     # 4) Snapshot base grid
-    #     self.base_grid = self.export_grid_numpy()
+        for r in range(self.num_rows):
+            for c in range(self.num_cols):
+                # right door: (c,r) <-> (c+1,r)
+                if c < self.num_cols - 1:
+                    u = self._map_rid(c, r, HALLWAY_COL)
+                    dpos = self._door_xy(c, r, Direction.right)
+                    obj = self.grid.get(*dpos)
+                    v = self._map_rid(c + 1, r, HALLWAY_COL)
+                    self._abs_add_edge(u, v, obj.color, obj.is_locked, pos=dpos)
+                # down door: (c,r) <-> (c,r+1) but skip hallway column
+                if r < self.num_rows - 1 and c != HALLWAY_COL:
+                    dpos = self._door_xy(c, r, Direction.down)
+                    obj = self.grid.get(*dpos)
+                    u = self._map_rid(c, r, HALLWAY_COL)
+                    v = self._map_rid(c, r + 1, HALLWAY_COL)
+                    self._abs_add_edge(u, v, obj.color, obj.is_locked, pos=dpos)
+
+        self.agents[1].state.pos = self.agents_start_pos[1]
+        self.agents[0].state.pos = self.agents_start_pos[0]
+
+        self.agents[1].state.dir = self.agents_start_dir[1]
+        self.agents[0].state.dir = self.agents_start_dir[0]
+        
+        # ---------- 5) 可选：重新生成/对齐 goals ----------
+        print("[Loader] Re-generating or aligning goals")
+        room = self._rid_from_xy(self.goal[0], self.goal[1], HALLWAY_COL)
+        self._gen_goals(len(self.goals))
+        self.goal_room = room
+        print("[Loader] Done.")
+
+    def restore_room_grid_from_tuples(self, base_rooms, *, set_neighbors=True):
+        """
+        用保存的 base_rooms = [[(top,size), ...], [...]] 恢复 room_grid。
+        注意：不绘制墙，墙/门/物体已经由 Grid.decode(base_grid) 恢复到 self.grid 里了。
+        """
+        print("[Loader] Restoring room_grid from tuples")
     
-    #     # 5) Place two agents: one random room; the other in hallway (if exists) else another random room
-    #     rooms_flat = [self.get_room(c, r) for r in range(self.num_rows) for c in range(self.num_cols)]
-    #     room_for_agent = self._rand_elem(rooms_flat)
-    #     MultiGridEnv.place_agent(self, self.agents[0], top=room_for_agent.top, size=room_for_agent.size)
+        # 1) 维度
+        num_rows = len(base_rooms)
+        assert num_rows > 0, "base_rooms is empty"
+        num_cols = len(base_rooms[0])
+        for row in base_rooms:
+            assert len(row) == num_cols, "base_rooms rows have inconsistent lengths"
     
-    #     if HALLWAY_COL is not None:
-    #         hall_top = self.get_room(HALLWAY_COL, 0).top
-    #         hall_size = (self.get_room(HALLWAY_COL, 0).size[0], self.height)
-    #         MultiGridEnv.place_agent(self, self.agents[1], top=hall_top, size=hall_size)
-    #     else:
-    #         another_room = self._rand_elem(rooms_flat)
-    #         MultiGridEnv.place_agent(self, self.agents[1], top=another_room.top, size=another_room.size)
+        # 如果你的环境里需要显式维护 num_rows/num_cols，这里一并对齐
+        self.num_rows = num_rows
+        self.num_cols = num_cols
     
-    #     # 6) Goals
-    #     self._gen_goals(self.num_goals)
-    #     room = self._rid_from_xy(self.goal[0], self.goal[1], HALLWAY_COL)
-    #     self.goal_room = room
-    #     # # 7) Debug prints
-    #     # print(f"[ABS] rooms={len(self.abs['rooms'])}, edges={len(self.abs['edges'])}")
-    #     # for rid, meta in self.abs["rooms"].items():
-    #     #     print(rid, meta)
+        # 2) 实例化 Room
+        self.room_grid = [[None] * num_cols for _ in range(num_rows)]
+        for r in range(num_rows):
+            for c in range(num_cols):
+                (top, size) = base_rooms[r][c]
+                # top/size 可能是 list，转成 tuple 更稳
+                top  = tuple(top)
+                size = tuple(size)
+                room = Room(top, size)
+                self.room_grid[r][c] = room
     
-    #     self.plans = plan_all_from_hall(self.abs, hall_id=("HALL",))
-    #     # for rid, acts in plans.items():
-    #     #     print_plan(rid, acts)
+        # 3) （可选）补邻接
+        if set_neighbors:
+            for r in range(num_rows):
+                for c in range(num_cols):
+                    room = self.room_grid[r][c]
+                    if c + 1 < num_cols:
+                        room.neighbors[Direction.right] = self.room_grid[r][c + 1]
+                    if r + 1 < num_rows:
+                        room.neighbors[Direction.down]  = self.room_grid[r + 1][c]
+                    if c - 1 >= 0:
+                        room.neighbors[Direction.left]  = self.room_grid[r][c - 1]
+                    if r - 1 >= 0:
+                        room.neighbors[Direction.up]    = self.room_grid[r - 1][c]
+    
+        print(f"[Loader] room_grid restored: {num_rows}x{num_cols}")
 

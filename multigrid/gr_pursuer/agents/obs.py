@@ -1,6 +1,7 @@
 from .base import BaseAgent
 from ..new_astar import astar, execute_action, get_obs_successor, get_reverse_successor
 from ..lock_astar import astar_key,astar_open
+from ..new_astar import astar
 
 import matplotlib.pyplot as plt
 
@@ -8,6 +9,9 @@ import math
 import numpy as np
 from multigrid.core.constants import DIR_TO_VEC, Direction,OBJECT_TO_IDX,COLOR_TO_IDX,Type
 from multigrid.core.actions import Action
+from multigrid.envs.new_locked import _plan_onekey_persist_open,_build_neighbors,_canon,_initial_open_mask
+from multigrid.envs.new_locked import _iter_room_keys,_key_position,_edge_position
+
 import random
 import os
 from collections import deque,defaultdict
@@ -27,61 +31,99 @@ class GreedyObserver(BaseAgent):
         self.hallway_col = env.num_cols // 2
         self.abs = env.abs
         self.goals = env.goals
-        self.goal_rooms = [_rid_from_xy(self.env,x,y,self.hallway_col) for x,y in self.goals]
-        #print(self.goal_rooms)
-        self.high_level_length = {}
-        for goal_room in self.goal_rooms:
-            high_level_plan = _plan_onekey_persist_open(self.abs, ("HALL",), goal_room, held = None)
-            self.high_level_length[goal_room] = (len(high_level_plan),high_level_plan)
-        ###——————————————————————————————————————————————————————————————————————————————————————
-
+        ###—————————————————————————————————————————————————————————————————————————————————————
         self.enable_hidden_cost = env.enable_hidden_cost
         if self.enable_hidden_cost:
             self.hidden_cost = env.hidden_cost
         else:
             self.hidden_cost = np.ones((env.width, env.height), dtype=np.float32)
 
-
     def compute_action(self, obs):
-
+        # 读取观测者状态
         obs_held = self.env.observer.carrying
-        obs_pos = self.env.observer.pos
-        obs_dir = self.env.observer.dir
-
+        obs_pos  = self.env.observer.pos
+        obs_dir  = self.env.observer.dir
+    
+        # 同步门/钥匙状态（注意：该函数不要修改全局结构外的东西）
+        self.update_door_state()
         door_list = self.abs["edges"]
-        subgoal_expected_payoff = {}
-
-        if obs_held:
-            for eid in range(len(door_list)):
-                door = door_list[eid]
-                if door["locked"] == True and obs_held.color == door["color"]:
-                    nearest_dist = manhattan_distance(obs_pos, door["pos"])
-                    subgoal_expected_payoff[eid] = nearest_dist
-                    
-            if subgoal_expected_payoff != {}:
-                best_eid, best_info = min(subgoal_expected_payoff.items(),key=lambda kv: kv[1])
-                door = door_list[best_eid]
-                path = astar_open((obs_pos,obs_dir),door["pos"],self.env,self.hidden_cost, version = True)
-                return path[1][0]
-                
-        subgoal_expected_payoff = {}
-        for eid in range(len(door_list)):
-            door = door_list[eid]
-            if door["locked"] == True:
-                all_keys = find_all_keys(self.abs["rooms"],door["color"])
-                nearest = min(all_keys, key=lambda k: manhattan_distance(k['pos'], obs_pos) 
-                                + manhattan_distance(k['pos'],door["pos"]))
-                
-                nearest_dist = (manhattan_distance(nearest['pos'], obs_pos)
-                    + manhattan_distance(nearest['pos'], door["pos"]))
-                
-                subgoal_expected_payoff[eid] = {"nearest_dist":nearest_dist,"nearest":nearest}
-                
-        best_eid, best_info = min(subgoal_expected_payoff.items(),key=lambda kv: kv[1]["nearest_dist"])
-        nearest = best_info["nearest"]
-        path = astar_key((obs_pos,obs_dir),nearest['pos'],self.env,self.hidden_cost,agent_idx = 0, version = True)
-       
+    
+        # 候选计划：[(total_dist, eid, plan_type, target_pos, nearest_key_dict)]
+        # plan_type: "open" 或 "pickup_then_open"
+        candidates = []
+    
+        for eid, door in enumerate(door_list):
+            if not door.get("locked", False):
+                continue  # 只考虑上锁的门
+    
+            door_color = door["color"]
+            door_pos   = door["pos"]
+    
+            # 情况 A：手里就有对应颜色的钥匙 → 直接去开门
+            if obs_held is not None and getattr(obs_held, "color", None) == door_color:
+                total_dist = manhattan_distance(obs_pos, door_pos)
+                candidates.append((total_dist, eid, "open", door_pos, None))
+                continue
+    
+            # 情况 B：手里没有对应钥匙 → 去找最近的该色钥匙，再去该门
+            all_keys = find_all_keys(self.abs["rooms"], door_color)  # [{'color':..., 'pos':(x,y)}, ...]
+            if not all_keys:
+                # 没有该颜色钥匙可拿，跳过这个门
+                continue
+    
+            # 选择 obs→key + key→door 最短的那把钥匙
+            def key_chain_dist(k):
+                kp = k['pos']
+                return manhattan_distance(obs_pos, kp) + manhattan_distance(kp, door_pos)
+    
+            nearest_key = min(all_keys, key=key_chain_dist)
+            total_dist  = key_chain_dist(nearest_key)
+    
+            candidates.append((total_dist, eid, "pickup_then_open", nearest_key['pos'], nearest_key))
+    
+        # 没有可行动的目标（例如全都无钥匙可达）
+        if not candidates:
+            # 这里按你工程里的“等待/随机/维持方向”策略返回一个安全动作
+            # 例如：保持不动或向前（请替换为你项目里的 no-op）
+            return 0
+    
+        # 选择总距离最小的门；若距离相同，用 eid 稳定打破平手
+        candidates.sort(key=lambda t: (t[0], t[1]))
+        best_dist, best_eid, plan_type, target_pos, nearest_key = candidates[0]
+        best_door = door_list[best_eid]
+    
+        # 具体执行路径规划
+        if plan_type == "open":
+            path = astar_open((obs_pos, obs_dir), best_door["pos"], self.env, self.hidden_cost, version=True)
+        else:
+            path = astar_key((obs_pos, obs_dir), target_pos, self.env, self.hidden_cost, agent_idx=0, version=True)
+    
+        # 保护：确保有下一步
+        if not path or len(path) < 2:
+            return 0  
+    
         return path[1][0]
+
+    def update_door_state(self):
+        for room in self.abs["rooms"]:
+            self.abs["rooms"][room]["keys"] = []
+        for x in range(self.env.width):
+            for y in range(self.env.height):
+                obj = self.env.grid.get(x,y)
+                if obj and obj.type == "key":
+                    room = _rid_from_xy(self.env,x,y,self.hallway_col)
+                    self.abs["rooms"][room]["keys"].append({'color':obj.color,'pos':(x,y)})
+        
+        for door_idx in range(len(self.abs["edges"])):
+            door = self.abs["edges"][door_idx]
+            door["locked"] = False
+
+            obj = self.env.grid.get(*door["pos"])
+            if obj:
+                door["locked"] = (self.env.grid.get(*door["pos"]).state == "locked" or 
+                                  self.env.grid.get(*door["pos"]).state == "closed")
+            else:
+                door["locked"] = False
 
 
 
@@ -93,27 +135,39 @@ class Observer(BaseAgent):
         self.hallway_col = env.num_cols // 2
         self.abs = env.abs
         self.goals = env.goals
+        self.goal = env.goal
+        self.belif_goal = None
+        self.unsolvable_goal = []
+        self.finished_plan = -1
+        
         self.goal_rooms = [_rid_from_xy(self.env,x,y,self.hallway_col) for x,y in self.goals]
         #print(self.goal_rooms)
         self.high_level_length = {}
-        for goal_room in self.goal_rooms:
-            high_level_plan = _plan_onekey_persist_open(self.abs, ("HALL",), goal_room, held = None)
-            self.high_level_length[goal_room] = (len(high_level_plan),high_level_plan)
-        self.finished_plan = -1
-
-        self.past_plans = []
         self.dist_matrix = self.compute_pairwise_distances()
+        self.past_plans = []
+        self.goal_length = {}        
+        self.prior = [1.0/len(self.goal_rooms) for g in self.goal_rooms]
+        self.current_prior = [1.0/len(self.goal_rooms) for g in self.goal_rooms]
+        self.past_pos = None
+        self.past_dir = None
 
-        self.goal_length = {}
-        for goal in self.goals:
-            goal_room = _rid_from_xy(self.env,*goal,self.hallway_col) 
-            self.goal_length[goal_room] = 0
-            pos = self.env.target.pos
-            dir = self.env.target.dir
-            for plan in self.high_level_length[goal_room][1]:
-                self.goal_length[goal_room] += self.dist_matrix[(pos,dir),plan['pos']['value']]
-                pos = plan['pos']['value']
-            #self.goal_length[goal_room] += self.dist_matrix[(pos,dir),goal]
+        ###——————————————————————————————————————————————————————————————————————————————————————
+
+        # 在 __init__ 里先加两个缓存
+        #self._locked_mask_prev = None
+        #self._keys_sig_prev = None
+        
+        self.update_high_level()
+        self.subgoal_dist = {}
+        self.current_palns = []
+        pos = self.env.target.pos
+        dir = self.env.target.dir
+        held = self.env.target.carrying
+        for plan in current_task_options_onekey_persist_open(self.abs,_rid_from_xy(self.env,*pos,self.hallway_col),
+                                                     held = held, end_rid = self.goal_rooms, goal_pos = self.goals):
+            self.current_palns.append(plan)
+        for plan in self.current_palns:
+            self.subgoal_dist[plan['pos']['value']] = self.dist_matrix[(pos,dir),plan['pos']['value']]
 
         ###——————————————————————————————————————————————————————————————————————————————————————
 
@@ -122,35 +176,229 @@ class Observer(BaseAgent):
             self.hidden_cost = env.hidden_cost
         else:
             self.hidden_cost = np.ones((env.width, env.height), dtype=np.float32)
+    
+    def _is_wall(self, pos):
+        obj = self.env.grid.get(*pos)
+        return (obj is not None) and (getattr(obj, "type", None) == "wall")
+    
 
-        for goal_room in self.goal_rooms:
-            print(goal_room, self.goal_length[goal_room])
+    def update_high_level(self):
+        pos = self.env.target.pos
+        held = self.env.target.carrying
+        start_rid = _rid_from_xy(self.env,*pos,self.hallway_col)
+        self.unsolvable_goal = []
+        self.past_plans = []
+        self.goal_length = {}
         
+        for goal_room_idx in range(len(self.goal_rooms)):
+            goal = self.goals[goal_room_idx]
+            goal_room = self.goal_rooms[goal_room_idx]
+            high_level_plan = _plan_onekey_persist_open(self.abs, start_rid, goal_room, held = held,goal = goal)
+            self.high_level_length[goal_room] = [len(high_level_plan),high_level_plan]
+            if self.high_level_length[goal_room][0] == 0:
+                self.unsolvable_goal.append(goal_room)
+            self.goal_length[goal_room] = high_level_plan
+        self.new_env = False
+        
+
     def length_compute(self,pos,dir,plan_list):
+        if plan_list == []:
+            return 5000
         total_length = 0
         for plan in plan_list:
             total_length += self.dist_matrix[(pos,dir),plan['pos']['value']]
             pos = plan['pos']['value']
         return total_length
 
-    def select_best_action(self,scores):
-        obs_held = self.env.observer.carrying
-        items = sorted(scores.items(), key=lambda kv: kv[1], reverse=True)
-        for k, v in items:
-            act, pos = k
-            if obs_held is not None and act == "pickup":
-                continue
-            if act == "open":
-                if obs_held is None:
-                    continue
-                print(obs_held.color , self.env.grid.get(*pos).color)
-                if obs_held.color != self.env.grid.get(*pos).color:
-                    continue
-            return k
+    def goal_recognition(self):
+        pos = self.env.target.pos
+        dir = self.env.target.dir
+        held = self.env.target.carrying
+        self.current_palns = []
+        #compute the high level plan
+        for plan in current_task_options_onekey_persist_open(self.abs,_rid_from_xy(self.env,*pos,self.hallway_col),
+                                                             held = held, end_rid = self.goal_rooms, goal_pos = self.goals):
+            self.current_palns.append(plan)
 
-        for k, v in items:
-            act, pos = k
-            return k
+        if held:
+            rid = _rid_from_xy(self.env, pos[0], pos[1], self.hallway_col)
+            self.abs["rooms"][rid]["keys"].append({
+                                        'color': held.color,
+                                        'pos': (pos[0],pos[1])})
+        
+        if self.past_pos and self.unsolvable_goal != []:
+            dx, dy = DIR_TO_VEC[dir]
+            new_pos = (pos[0] + dx, pos[1] + dy)
+            if not (0 <= new_pos[0] < self.env.width and 0 <= new_pos[1] < self.env.height):
+                if self.past_pos == pos and self.past_dir == dir:
+                    for goal_room in self.unsolvable_goal:
+                        self.high_level_length[goal_room][0] += 10
+                else:
+                    for goal_room in self.unsolvable_goal:
+                        self.high_level_length[goal_room][0] -= 10
+            else:
+                obj = self.env.grid.get(*new_pos)
+                if self.past_pos == pos and self.past_dir == dir:
+                    if obj and obj.type == "door":
+                        for goal_room, (length_val, path_list) in self.high_level_length.items():
+                            for event in path_list:
+                                if 'pos' in event and event['pos']['value'] == new_pos:
+                                    self.high_level_length[goal_room][0] -= 10
+                                    break
+                    else:
+                        for goal_room in self.unsolvable_goal:
+                            self.high_level_length[goal_room][0] += 10
+                else:
+                    for goal_room in self.unsolvable_goal:
+                        self.high_level_length[goal_room][0] -= 10
+
+        if self.new_env :
+            #print("new env!")
+            self.update_high_level()
+            self.finished_plan = -1
+            self.steps = 0
+            self.prior = self.current_prior
+
+        # check the plan has changed and inital the subgoal
+        if self.past_plans != self.current_palns:
+            self.weights = [1/len(self.current_palns) for g in self.current_palns]
+            self.finished_plan += 1
+            self.steps = 0
+            self.subgoal_dist = {}
+            start_rid = _rid_from_xy(self.env,*pos,self.hallway_col)
+            for goal_room_idx in range(len(self.goal_rooms)):
+                goal = self.goals[goal_room_idx]
+                goal_room = self.goal_rooms[goal_room_idx]
+                high_level_plan = _plan_onekey_persist_open(self.abs, start_rid, goal_room, held = held,goal = goal)
+                self.goal_length[goal_room] = high_level_plan
+                
+            for plan in self.current_palns:
+                if plan['type'] == 'pickup':
+                    self.subgoal_dist[plan['pos']['value']] = len(astar_key(
+                                    (pos,dir),plan['pos']['value'],self.env,self.hidden_cost,agent_idx =1))
+                elif plan['type'] == 'open':
+                    self.subgoal_dist[plan['pos']['value']] = len(astar_open(
+                                    (pos,dir),plan['pos']['value'],self.env,self.hidden_cost))
+
+                else:
+                    self.subgoal_dist[plan['pos']['value']] = len(astar((pos, dir), plan['pos']['value'], self.env, self.hidden_cost))
+                    
+        else:
+            self.steps += 1
+                    
+        # return [1 for i in range(len(self.goals))] #uniform
+        # return [1 if g == self.goal else 0 for g in self.goals]
+        if self.current_palns == []:
+            return [1 for i in range(len(self.goals))]
+
+        
+        #compute the high level plan
+        subgoal_pro = []
+        subgoal_final_pro = []
+
+        for plan in self.current_palns:
+            start_rid = _rid_from_xy(self.env,*plan['pos']['value'],self.hallway_col)
+            softmax = []
+            if plan['type'] == 'pickup':
+                subgoal_dist = self.steps + len(astar_key(
+                                    (pos,dir),plan['pos']['value'],self.env,self.hidden_cost,agent_idx =1))
+                subgoal_optimal = self.subgoal_dist[plan['pos']['value']]
+                diff = subgoal_dist - subgoal_optimal
+                subgoal_pro.append(diff)
+                
+                for goal_room in self.goal_rooms:
+                    plan_len = len(_plan_onekey_persist_open(self.abs, start_rid, goal_room, held = plan['key']))
+                    current_high_length  = self.finished_plan + plan_len + 1
+                    var = current_high_length - self.high_level_length[goal_room][0]
+                    softmax.append(var)
+            elif plan['type'] == 'open':
+                subgoal_dist = self.steps + len(astar_open(
+                                    (pos,dir),plan['pos']['value'],self.env,self.hidden_cost))
+                subgoal_optimal = self.subgoal_dist[plan['pos']['value']]
+                diff = subgoal_dist - subgoal_optimal
+                subgoal_pro.append(diff)
+                
+                for goal_room in self.goal_rooms:
+                    mask = _initial_open_mask(self.abs)
+                    mask |= (1 << plan['eid'])
+                    plan_len = len(_plan_onekey_persist_open(self.abs, start_rid, goal_room, held = held,open_mask = mask))
+                    current_high_length = self.finished_plan + plan_len + 1
+                    var = current_high_length - self.high_level_length[goal_room][0]
+                    softmax.append(var)
+            else:
+                subgoal_dist = self.steps + len(astar((pos, dir), plan['pos']['value'], self.env, self.hidden_cost))
+                subgoal_optimal = self.subgoal_dist[plan['pos']['value']]
+                diff = subgoal_dist - subgoal_optimal
+                subgoal_pro.append(diff)
+                
+                for goal_room in self.goal_rooms:
+                    if goal_room == plan["room"]:
+                        softmax.append(0.0)
+                    else:
+                        softmax.append(5.0)
+            subgoal_final_pro.append(softmax_prob(softmax))
+
+
+        self.past_pos = pos
+        self.past_dir = dir
+        
+        # print([(plan['pos']['value'],plan['type']) for plan in self.current_palns])
+        # print("subgoal_pro", [f"{x}" for x in subgoal_pro])
+        #print("subgoal_final_pro\n")
+        # for i in subgoal_final_pro:
+        #     print([f"{x:.2f}" for x in i])
+        
+        if self.past_plans != self.current_palns:
+            w = np.linalg.lstsq(np.array(subgoal_final_pro).T, np.array(self.prior), rcond=None)[0]
+            self.weights  = _project_to_simplex(w)
+            weights = self.weights 
+            likelihood = weighted_goal_probabilities(weights, subgoal_final_pro)
+        else:
+            weights = softmax_prob(subgoal_pro)
+            weights = [self.weights[g] * weights[g] for g in range(len(weights))]
+            weights = [w / sum(weights) for w in weights]
+            likelihood  = weighted_goal_probabilities(weights, subgoal_final_pro)
+
+
+        # print("prio weights",[f"{x:.2f}" for x in self.weights])
+        # print("weights",[f"{x:.2f}" for x in weights])
+                
+        post = {g: 0.0 for g in self.goal_rooms}
+        for gi, g in enumerate(self.goal_rooms):
+            post[g] += likelihood[gi]
+        for gi, g in enumerate(self.goal_rooms):
+            post[g] *= self.prior[gi]
+        Z = sum(post.values()) + 1e-12
+        for g in post:
+            post[g] /= Z
+        prob = list(post.values())
+        self.current_prior = prob
+        self.past_plans = self.current_palns
+
+        
+        #paper
+        #if self.env.step_count > 5 and  self.belif_goal is None:
+
+        if max(prob)> (1/len(self.goals)+0.1) and  self.belif_goal is None:
+            best_idx = int(np.argmax(prob))
+            self.belif_goal = self.goals[best_idx]
+
+        if self.belif_goal:
+            return [1 if g == self.belif_goal else 0 for g in self.goals]
+
+        return [1 for i in range(len(self.goals))] 
+        
+        #return [1 if g == self.goal else 0 for g in self.goals] # upperbound
+
+    
+        # print("prob:",[f"{x:.2f}" for x in prob])
+        # print(self.goal_rooms)
+        
+        # best_idx = int(np.argmax(prob))
+        # self.belif_goal = self.goals[best_idx]
+        # return prob   #gr
+        #return 0
+
 
     def compute_action(self, obs):
         pos = self.env.target.pos
@@ -159,128 +407,236 @@ class Observer(BaseAgent):
         obs_held = self.env.observer.carrying
         obs_pos = self.env.observer.pos
         obs_dir = self.env.observer.dir
-        print(self.goal_rooms)
+        self.update_door_state()
+        abs_graph = deepcopy(self.abs)
         goal_recognition = self.goal_recognition()
-        print(goal_recognition)
 
+        #print(goal_recognition)
         start_rid = _rid_from_xy(self.env,*pos,self.hallway_col)
-        door_list = self.abs["edges"]
+        door_list = abs_graph["edges"]
         subgoal_expected_payoff = {}
+
         for eid in range(len(door_list)):
-            subgoal_expected_payoff[eid] = 0
             door = door_list[eid]
-            if door["locked"] == True:
+            abs_graph_new = deepcopy(abs_graph)
+            all_keys = find_all_keys(abs_graph_new["rooms"],door["color"])
+            if door["locked"] == True and (all_keys != [] or (obs_held is not None and obs_held.color == door["color"])):
+                key_distance = 0
+                subgoal_expected_payoff[eid] = 0
+                if all_keys  != []:
+                    if (obs_held is None or obs_held.color != door["color"]):
+                        nearest = min(all_keys, key=lambda k: manhattan_distance(k['pos'], obs_pos) + manhattan_distance(k['pos'],door["pos"]))
+                        key_distance = manhattan_distance(nearest["pos"],door["pos"]) + manhattan_distance(nearest["pos"],obs_pos)
+                        if {"color":nearest["color"],"pos":nearest["pos"]} in abs_graph_new["rooms"][nearest["room"]]["keys"]:
+                            keys = abs_graph_new["rooms"][nearest["room"]]["keys"]
+                            target = {"color": nearest["color"], "pos": nearest["pos"]}
+                            try:
+                                keys.remove(target)
+                            except ValueError:
+                                pass 
+                    else:
+                        key_distance = manhattan_distance(obs_pos,door["pos"])
                 for goal_room_idx in range(len(self.goal_rooms)):
                     goal_room = self.goal_rooms[goal_room_idx]
-                    mask = _initial_open_mask(self.abs)
+                    goal = self.goals[goal_room_idx]
+                    mask = _initial_open_mask(abs_graph_new)
                     mask |= (1 << eid)
-                    plan_list = _plan_onekey_persist_open(self.abs,start_rid, goal_room, held = held,open_mask = mask)
-                    payoff = (self.goal_length[goal_room] - self.length_compute(pos,dir,plan_list))/(self.goal_length[goal_room]+0.01)
+                    plan_list = _plan_onekey_persist_open(abs_graph_new,start_rid, goal_room, held = held,open_mask = mask, goal = goal)
+                    payoff = (self.length_compute(pos,dir,self.goal_length[goal_room])
+                              - self.length_compute(pos,dir,plan_list))  - 0.1*key_distance
                     excepted_payoff = goal_recognition[goal_room_idx] * payoff
                     subgoal_expected_payoff[eid] += excepted_payoff
 
-        print(subgoal_expected_payoff)
+        if subgoal_expected_payoff == {}:
+            return 0
         max_door = max(subgoal_expected_payoff, key=subgoal_expected_payoff.get)
-
-        
         door = self.abs["edges"][max_door]
-        print(door["color"],door["pos"])
+        #print(door["pos"],door["color"],max_door,subgoal_expected_payoff[max_door])
         
         path = []
         if obs_held:
-            #print(obs_held.color,door["color"])
             if obs_held.color == door["color"]:
                 path = astar_open((obs_pos,obs_dir),door["pos"],self.env,self.hidden_cost, version = True)
-                return path[1][0]
-
-        all_keys = find_all_keys(self.abs["rooms"],door["color"])
+                if path[1][0] in [Action.drop,Action.pickup,Action.toggle]:
+                    self.new_env = True
+                return path[1][0] 
+        all_keys = find_all_keys(abs_graph["rooms"],door["color"])
         nearest = min(all_keys, key=lambda k: manhattan_distance(k['pos'], obs_pos) + manhattan_distance(k['pos'],door["pos"]))
         path = astar_key((obs_pos,obs_dir),nearest['pos'],self.env,self.hidden_cost,agent_idx =0, version = True)
-        return path[1][0]
+        if path[1][0] in [Action.drop,Action.pickup,Action.toggle]:
+            self.new_env = True
 
-    def goal_recognition(self):
-        pos = self.env.target.pos
-        dir = self.env.target.dir
-        held = self.env.target.carrying
-        self.current_palns = []
-        # update door state
+        #print( path[1][0])
+
+        return path[1][0] 
+
+        # if self.goal:
+        #     return path[1][0]
+        # else:
+        #     return 0
+
+
+    # def goal_recognition(self):
+    #     pos = self.env.target.pos
+    #     dir = self.env.target.dir
+    #     held = self.env.target.carrying
+    #     self.current_palns = []
+    #     #compute the high level plan
+    #     for plan in current_task_options_onekey_persist_open(self.abs,_rid_from_xy(self.env,*pos,self.hallway_col),
+    #                                                          held = held, end_rid = self.goal_rooms, goal_pos = self.goals):
+    #         self.current_palns.append(plan)
+    #     # check the plan has changed and inital the subgoal
+        
+    #     if held:
+    #         rid = _rid_from_xy(self.env, pos[0], pos[1], self.hallway_col)
+    #         self.abs["rooms"][rid]["keys"].append({
+    #                                     'color': held.color,
+    #                                     'pos': (pos[0],pos[1])})
+    #     if self.new_env:
+    #         print("new env!")
+    #         self.update_high_level()
+    #         self.steps = 0
+    #         self.subgoal_dist = {}
+    #         self.prior = self.current_prior
+    #         for plan in self.current_palns:
+    #             self.subgoal_dist[plan['pos']['value']] = self.dist_matrix[(pos,dir),plan['pos']['value']]
+    #     else:
+    #         self.steps += 1
+    #     self.past_plans = self.current_palns
+    #     abs_graph = deepcopy(self.abs)
+    #     #compute the high level plan
+    #     subgoal_pro = []
+    #     subgoal_final_pro = []
+    #     if self.current_palns == []:
+    #         return [1 for i in range(len(self.goals))]
+    #     #print(self.subgoal_dist)
+    #     #print(self.current_palns)
+    #     for plan in self.current_palns:
+    #         start_rid = _rid_from_xy(self.env,*plan['pos']['value'],self.hallway_col)
+    #         subgoal_dist = self.steps + self.dist_matrix[(pos,dir),plan['pos']['value']]
+    #         subgoal_optimal = self.subgoal_dist[plan['pos']['value']]
+    #         diff = subgoal_dist - subgoal_optimal
+    #         subgoal_pro.append(diff)
+    #         softmax = []         
+    #         if plan['type'] == 'pickup':
+    #             for goal_room_idx in range(len(self.goal_rooms)):
+    #                 goal_room = self.goal_rooms[goal_room_idx]
+    #                 goal = self.goals[goal_room_idx]
+    #                 current_high_length  = len(_plan_onekey_persist_open(abs_graph, start_rid,goal_room, held = plan['key'],goal = goal)) + 1
+    #                 var = current_high_length - self.high_level_length[goal_room][0]
+    #                 print(current_high_length,self.high_level_length[goal_room][0],goal_room,plan['type'],plan['pos']['value'])
+    #                 print(_plan_onekey_persist_open(abs_graph, start_rid,goal_room, held = plan['key'],goal = goal),"\n")
+    #                 print(self.high_level_length[goal_room][1])
+    #                 softmax.append(var)
+    #         elif plan['type'] == 'open':
+    #             for goal_room_idx in range(len(self.goal_rooms)):
+    #                 goal_room = self.goal_rooms[goal_room_idx]
+    #                 goal = self.goals[goal_room_idx]
+    #                 mask = _initial_open_mask(abs_graph)
+    #                 mask |= (1 << plan['eid'])
+    #                 current_high_length = len(_plan_onekey_persist_open(abs_graph,start_rid, goal_room, held = held,open_mask = mask,goal=goal)) + 1
+    #                 var = current_high_length - self.high_level_length[goal_room][0]
+    #                 print(current_high_length,self.high_level_length[goal_room][0],goal_room,plan['type'],plan['pos']['value'])
+    #                 # if goal_room ==  (0, 1):
+    #                 print(_plan_onekey_persist_open(abs_graph,start_rid, goal_room, held = held,open_mask = mask,goal=goal),"\n")
+    #                 print(self.high_level_length[goal_room][1])
+    #                 softmax.append(var)
+    #         else:
+    #             for goal_room in self.goal_rooms:
+    #                 if goal_room == plan["room"]:
+    #                     softmax.append(0.0)
+    #                 else:
+    #                     softmax.append(5.0)
+    #         subgoal_final_pro.append(softmax_prob(softmax))
+        
+    #     weights = softmax_prob(subgoal_pro)
+    #     print("weights",weights)
+    #     print("subgoal_final_pro")
+    #     for i in subgoal_final_pro:
+    #         print(i)
+    #     likelihood  = weighted_goal_probabilities(weights, subgoal_final_pro)
+
+    #     post = {g: 0.0 for g in self.goal_rooms}
+    #     for gi, g in enumerate(self.goal_rooms):
+    #         post[g] += likelihood[gi]
+    #     # 乘上先验并归一化
+    #     #if not new_env == False:
+    #     for g in post:
+    #         post[g] *= self.prior[g]
+    #     Z = sum(post.values()) + 1e-12
+    #     for g in post:
+    #         post[g] /= Z
+    #     prob = list(post.values())
+    #     self.current_prior = post
+
+        
+    #     # if self.goal:
+    #     #     return [1 if g == self.goal else 0 for g in self.goals]
+    #     # else:
+    #     #     for i in range(len(prob)):
+    #     #         if prob[i] > 0.5:
+    #     #             self.goal = self.goals[i]
+    #     #     return prob   #gr
+
+    #     #return [1 if g == self.goal else 0 for g in self.goals]
+    #     #return [1 for i in range(len(self.goals))] #uniform
+    #     print("prob:",prob)
+    #     print(self.goal_rooms)
+    #     return prob   #gr
+    
+    def update_door_state(self):
+        # 1) 清空 rooms 里的 keys（保持你原流程）
         for room in self.abs["rooms"]:
             self.abs["rooms"][room]["keys"] = []
+    
+        # 2) 扫描 grid 的钥匙，写回 abs，并同时构造 keys_sig
+        keys_acc = []
         for x in range(self.env.width):
             for y in range(self.env.height):
-                obj = self.env.grid.get(x,y)
+                obj = self.env.grid.get(x, y)
                 if obj and obj.type == "key":
-                    room = _rid_from_xy(self.env,x,y,self.hallway_col)
-                    self.abs["rooms"][room]["keys"].append({'color':obj.color,'pos':(x,y)})
-                   
-        for door in self.abs["edges"]:
-            obj = self.env.grid.get(*door["pos"])
-            if obj:
-                door["locked"] = (self.env.grid.get(*door["pos"]).state == "locked")
-            else:
-                door["locked"] = False
-        #compute the high level plan
-        for plan in current_task_options_onekey_persist_open(self.abs,_rid_from_xy(self.env,*pos,self.hallway_col),
-                                                             held = held, end_rid = self.goal_rooms, goal_pos = self.goals):
-            self.current_palns.append(plan)
-
-        # check the plan has changed and inital the subgoal
-        if self.past_plans != self.current_palns:
-            self.finished_plan += 1
-            self.steps = 0
-            self.subgoal_dist = {}
-            for plan in self.current_palns:
-                self.subgoal_dist[plan['pos']['value']] = self.dist_matrix[(pos,dir),plan['pos']['value']]
-        else:
-            self.steps += 1
-        
-        self.past_plans = self.current_palns
-        #compute the high level plan
-        subgoal_pro = []
-        subgoal_final_pro = []
-        for plan in self.current_palns:
-            start_rid = _rid_from_xy(self.env,*plan['pos']['value'],self.hallway_col)
-            subgoal_dist = self.steps + self.dist_matrix[(pos,dir),plan['pos']['value']]
-            subgoal_optimal = self.subgoal_dist[plan['pos']['value']]
-            diff = subgoal_dist - subgoal_optimal
-            subgoal_pro.append(diff)
-            softmax = []
-            
-            if plan['type'] == 'pickup':
-                for goal_room in self.goal_rooms:
-                    current_high_length  = self.finished_plan + len(_plan_onekey_persist_open(self.abs, start_rid,
-                                                                                              goal_room, held = plan['key'])) + 1
-                    var = current_high_length - self.high_level_length[goal_room][0]
-                    softmax.append(var)
-            elif plan['type'] == 'open':
-                for goal_room in self.goal_rooms:
-                    mask = _initial_open_mask(self.abs)
-                    mask |= (1 << plan['eid'])
-                    current_high_length = self.finished_plan + len(_plan_onekey_persist_open(self.abs,
-                                                                                             start_rid, goal_room, held = held,
-                                                                                             open_mask = mask)) + 1
-                    var = current_high_length - self.high_level_length[goal_room][0]
-                    softmax.append(var)
-            else:
-                for goal_room in self.goal_rooms:
-                    if goal_room == plan["room"]:
-                        softmax.append(0.0)
-                    else:
-                        softmax.append(20.0)
-            subgoal_final_pro.append(softmax_prob(softmax))
-        
-        
-        weights = softmax_prob(subgoal_pro)
-        return weighted_goal_probabilities(weights, subgoal_final_pro)
-
+                    room = _rid_from_xy(self.env, x, y, self.hallway_col)
+                    color = _canon_color(obj.color)
+                    self.abs["rooms"][room]["keys"].append({"color": obj.color, "pos": (x, y)})
+                    room = _canon_room(room)
+                    keys_acc.append((room, color, x, y))
     
+        # 排序后不可变，便于比较
+        keys_sig = tuple(sorted(keys_acc))
+    
+        # 3) 更新门状态，并构造 bitmask
+        locked_mask = 0
+        for i, door in enumerate(self.abs["edges"]):
+            obj = self.env.grid.get(*door["pos"])
+            if obj and (obj.type == "door"):
+                locked = (obj.state != "open")
+            else:
+                locked = False
+            door["locked"] = locked
+            if locked:
+                locked_mask |= (1 << i)
+    
+        # # 4) 与上一次签名比较，判断是否变化（无需 deepcopy）
+        # changed = False
+        # if (self._locked_mask_prev is None) or (self._keys_sig_prev is None):
+        #     changed = True  # 第一次调用视为“有变化”
+        # else:
+        #     changed = (locked_mask != self._locked_mask_prev) or (keys_sig != self._keys_sig_prev)
+    
+        # # 5) 缓存当前签名 & 输出标记
+        # #print("here?")
+        # self._locked_mask_prev = locked_mask
+        # self._keys_sig_prev = keys_sig
+        # self.new_env = changed
+
+
     def compute_pairwise_distances(self):
         """
         Compute shortest distances from every state (cell + direction) to every free cell.
         Return: dict with keys ((pos, dir), target_cell) -> distance
         """
         # 1) 可走格子与索引
-        free_cells = np.argwhere(self.env.base_grid != 2)
+        free_cells = np.argwhere(self.env.base_grid[:, :, 0] != 2)
         num_cells = len(free_cells)
         num_directions = 4
         num_states = num_cells * num_directions
@@ -294,14 +650,12 @@ class Observer(BaseAgent):
         for tgt_idx, tgt_cell in enumerate(free_cells):
             queue = deque([(cell_to_index[tuple(tgt_cell)], d, 0) for d in range(num_directions)])
             visited = set()
-    
             while queue:
                 current_idx, current_dir, current_dist = queue.popleft()
                 state = (current_idx, current_dir)
                 if state in visited:
                     continue
                 visited.add(state)
-    
                 # 写入该目标格子对应的距离
                 dist_matrix[tgt_idx, current_idx * num_directions + current_dir] = current_dist
                 # 从当前状态反推上一个状态（谁能走到我）
@@ -321,9 +675,23 @@ class Observer(BaseAgent):
             pos_state = (tuple(cell), dir_)
             for tgt_idx, tgt_cell in enumerate(free_cells):
                 adjusted_dist_matrix[(pos_state, tuple(tgt_cell))] = dist_matrix[tgt_idx, s]
-    
+
         return adjusted_dist_matrix
 
+def compute_prior_for_uniform_posterior(likelihood):
+    likelihood = np.array(likelihood, dtype=float)
+    inv = 1 / likelihood
+    prior = inv / np.sum(inv)
+    return prior
+
+def _canon_color(c):
+    # 枚举/字符串统一成字符串
+    return getattr(c, "value", getattr(c, "name", str(c))).lower()
+
+def _canon_room(room):
+    # room 可能是 (r,c) 或 ('HALL',) 或其他；统一成字符串
+    return str(room)
+    
     # def compute_action(self, obs):
     #     pos = self.env.target.pos
     #     dir = self.env.target.dir
@@ -475,6 +843,7 @@ def weighted_goal_probabilities(weights, matrix):
     return weighted_prob
 
 def softmax_prob(xs):
+    
     exps = [math.exp(-x) for x in xs]
     s = sum(exps)
     return [e / s for e in exps]
@@ -623,7 +992,6 @@ def _rid_from_xy(env, x, y, hallway_col):
     # 万一没命中，保守返回 None（调用处做兜底）
     return None
 
-    
 def find_all_keys(data,color):
     all_keys = []
     for room, info in data.items():
@@ -637,159 +1005,57 @@ def find_all_keys(data,color):
     return all_keys
 
 
-# 邻接：adj[r] = [(nbr, color, eid)] 
-def _build_neighbors(abs_graph) -> Dict[Any, List[Tuple[Any, Any, int]]]: 
-    adj = defaultdict(list) 
-    for eid, e in enumerate(abs_graph["edges"]): 
-        u, v = e["u"], e["v"] 
-        col = e.get("color", None) 
-        adj[u].append((v, col, eid)) 
-        adj[v].append((u, col, eid)) 
-    return adj
 
 
-# —— 颜色统一（Enum/字符串都支持）—— #
-def _canon(c):
-    if c is None: return None
-    return c.name if hasattr(c, "name") else str(c)
 
-# —— 取钥匙位置（容错：可能没有pos）—— #
-def _key_position(k):
-    # new format: {"color":..., "pos":(x,y)}
-    if isinstance(k, dict) and "pos" in k:
-        return ("xy", tuple(k["pos"]))
-    # fallback: 无位置信息
-    return (None, None)
+def _project_to_simplex(w):
+    """把 w 投影到 {w >= 0, sum w = 1} 的概率单纯形（O(n log n)算法）。"""
+    w = np.asarray(w, dtype=float)
+    if w.ndim != 1:
+        w = w.ravel()
+    n = w.size
+    u = np.sort(w)[::-1]
+    cssv = np.cumsum(u)
+    rho = np.nonzero(u * np.arange(1, n+1) > (cssv - 1))[0]
+    rho = rho[-1] if rho.size else 0
+    theta = (cssv[rho] - 1) / (rho + 1.0)
+    w_proj = np.maximum(w - theta, 0.0)
+    return w_proj
 
-# —— 统一遍历房间内钥匙（返回列表[(color, kobj)]，kobj可为原字典或颜色字符串）—— #
-def _iter_room_keys(room_dict):
-    keys_raw = list(room_dict.get("keys", []))
-    out = []
-    for k in keys_raw:
-        if isinstance(k, dict):
-            color = _canon(k.get("color", None))
-            out.append((color, k))
-        else:
-            # legacy plain color
-            out.append((_canon(k), k))
-    return out
-
-# —— 帮助：安全取门位置信息 —— #
-def _edge_position(abs_graph, eid):
-    e = abs_graph["edges"][eid]
-    # 优先使用显式坐标/位置
-    for key in ("pos", "door_xy", "xy", "at"):
-        if key in e:
-            return {"type": "xy", "value": e[key]}
-    # 退化：用房间端点描述
-    return {"type": "rooms", "value": (e.get("u"), e.get("v"))}
-
-# —— 初始已开门mask（无色门或 locked=False 视为已开）—— #
-def _initial_open_mask(abs_graph) -> int:
-    #print(abs_graph)
-    mask = 0
-    for eid, e in enumerate(abs_graph["edges"]):
-        col = e.get("color", None)
-        locked = e.get("locked", True)
-        if _canon(col) is None or not locked:
-            mask |= (1 << eid)
-    return mask
-
-
-# —— 单目标：单钥匙 + 持久开门 —— #
-def _plan_onekey_persist_open(abs_graph, start_rid, goal_rid, held = None,open_mask = None, ):
+def fit_weights_keep_prior(lik_rows, max_iter=50000, lr=0.5, tol=1e-9):
     """
-    返回：events（按时间顺序）
-    events 元素两类：
-      1) {'type':'pickup', 'room': rid, 'key': 'red', 'pos': {'type':'xy','value':(x,y)}|{'type':None,'value':None}}
-      2) {'type':'open',   'eid': eid, 'color':'red',
-          'from': u, 'to': v, 'pos': {...}}
-    若不可达：返回 None
+    给定若干 subgoal 的似然行向量（每行长度=K，已归一化），
+    反求组合权重 w，使 v = sum_j w_j*lik_rows[j] 尽量“各列相等”（posterior≈prior）。
+
+    lik_rows: list[np.ndarray], 形状 (m, K)，每一行是一个 subgoal 对 K 个 goal 的似然分布
+    返回: w (m,)  满足 w>=0, sum w=1
     """
-    rooms = abs_graph["rooms"]
-    adj   = _build_neighbors(abs_graph)
-    if held is not None and hasattr(held, "color"):
-        held = held.color
+    L = np.asarray(lik_rows, dtype=float)  # (m, K)
+    m, K = L.shape
 
-    if open_mask is None:
-        open_mask = _initial_open_mask(abs_graph)
+    # 预处理：每行归一化，避免尺度差异
+    L = L / (L.sum(axis=1, keepdims=True) + 1e-12)
 
-    start_state = (start_rid, held, open_mask)
-    q = deque([start_state])
+    # 初始化：用“信息量”启发（列方差的倒数）；也可用均匀
+    w = np.ones(m, dtype=float) / m
 
-    prev  = {start_state: None}
-    prev_evt: Dict[Tuple[Any, Optional[Any], int], Dict[str, Any]] = {}
+    # 惩罚目标： minimize f(w) = ||v - mean(v)||^2，其中 v = L^T w
+    for _ in range(max_iter):
+        v = L.T @ w                    # (K,)
+        v_bar = v.mean()
+        r = v - v_bar                  # 残差（去均值）
+        f = float(np.dot(r, r))        # 当前目标
 
-    while q:
-        rid, held, open_mask = q.popleft()
-        if rid == goal_rid:
-            # 回溯事件
-            path_events: List[Dict[str, Any]] = []
-            cur = (rid, held, open_mask)
-            while prev[cur] is not None:
-                evt = prev_evt.get(cur)
-                if evt:
-                    path_events.append(evt)
-                cur = prev[cur]
-            path_events.reverse()
-            return path_events
+        # 梯度：df/dw = 2 * L * r
+        grad = 2.0 * (L @ r)           # (m,)
 
-        # ---- 先移动（可能开门） ----
-        for nb, col, eid in adj[rid]:
-            ccol = _canon(col)
-            opened = (open_mask >> eid) & 1
+        # 梯度步 + 投影回单纯形
+        w_new = _project_to_simplex(w - lr * grad)
 
-            if opened or ccol is None or ccol == _canon(held):
-                next_open = open_mask
-                evt = None
-                if (not opened) and (ccol is not None) and (ccol == _canon(held)):
-                    next_open |= (1 << eid)
-                    pos_info = _edge_position(abs_graph, eid)
-                    evt = {
-                        "type":  "open",
-                        "eid":   eid,
-                        "color": ccol,
-                        "from":  rid,
-                        "to":    nb,
-                        "pos":   pos_info
-                    }
+        # 收敛判据
+        if np.linalg.norm(w_new - w, ord=1) < tol:
+            w = w_new
+            break
+        w = w_new
 
-                ns = (nb, held, next_open)
-                if ns not in prev:
-                    prev[ns] = (rid, held, open_mask)
-                    prev_evt[ns] = evt
-                    q.append(ns)
-
-        # ---- 在当前房间拿/换钥匙（零代价扩展） ----
-        room_keys = _iter_room_keys(rooms[rid])
-        if room_keys:
-            if held is None:
-                for kcolor, kraw in room_keys:
-                    ns = (rid, kcolor, open_mask)
-                    if ns not in prev:
-                        prev[ns] = (rid, held, open_mask)
-                        kpos_type, kpos_val = _key_position(kraw)
-                        prev_evt[ns] = {
-                            "type": "pickup",
-                            "room": rid,
-                            "key":  kcolor,
-                            "pos":  {"type": kpos_type, "value": kpos_val}
-                        }
-                        q.append(ns)
-            else:
-                for kcolor, kraw in room_keys:
-                    if kcolor != _canon(held):
-                        ns = (rid, kcolor, open_mask)
-                        if ns not in prev:
-                            prev[ns] = (rid, held, open_mask)
-                            kpos_type, kpos_val = _key_position(kraw)
-                            prev_evt[ns] = {
-                                "type": "pickup",
-                                "room": rid,
-                                "key":  kcolor,  # 换到的新钥匙
-                                "pos":  {"type": kpos_type, "value": kpos_val}
-                            }
-                            q.append(ns)
-
-    return []
-
+    return w
