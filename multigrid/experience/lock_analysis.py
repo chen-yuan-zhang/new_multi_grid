@@ -5,7 +5,7 @@ import seaborn as sns
 
 if __name__ == "__main__":
 
-    datasets = ["result.csv"]
+    datasets = ["result_new.csv"]
 
     for dataset in datasets:
         # 读取数据

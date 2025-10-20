@@ -97,7 +97,7 @@ class LockTarget(BaseAgent):
                 if path and path[1][0] is not None:
                     return path[1][0]
                 else:
-                    return Action.left
+                    return Action.stay
             elif ety == "open":
                 dpos = tuple(evt["pos"]["value"])
                 path = astar_open((pos, dir), dpos, self.env, self.hidden_cost)
@@ -110,7 +110,7 @@ class LockTarget(BaseAgent):
         if path and path[1][0] is not None:
             return path[1][0]
         else:
-            return Action.left
+            return Action.stay
 
     def update_door_state(self):
         for room in self.abs["rooms"]:

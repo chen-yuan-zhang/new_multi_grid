@@ -20,7 +20,7 @@ def run(base_grid=None, base_rooms=None, num_rows=None, num_cols=None,
                     agents_start_dir=agents_start_dir,
                     goals=goals,
                     goal=goal,
-                    render_mode=None)
+                    render_mode=render_mode)
 
     observation, infos = env.reset()
     #TargetAgent  = OldLockTarget(env)
@@ -44,7 +44,7 @@ def run(base_grid=None, base_rooms=None, num_rows=None, num_cols=None,
         print(actions)
         observation, reward, terminated, truncated, info = env.step(actions)
         steps += 1
-        #input()
+        input()
 
         predicted_goal = ObserverAgent.belif_goal
         if predicted_goal == env.goal:
@@ -54,7 +54,8 @@ def run(base_grid=None, base_rooms=None, num_rows=None, num_cols=None,
                 print("Success")
                 print(steps)
         else:
-             flag = False
+            flag = False
+            first_step = -1
 
     if first_step == -1:
         first_step = steps
@@ -68,27 +69,28 @@ def main(dataset=None):
     print(dataset)
     if dataset is not None:
         scenarios = pd.read_csv(dataset)
-    for idx, scenario in scenarios.iterrows():
+    # for idx, scenario in scenarios.iterrows():
+    #     print(f"Scenario {idx}")
+        idx = 369  # 第40个（1-based）→ 0-based 索引为 39
         print(f"Scenario {idx}")
-        # idx = 162  # 第40个（1-based）→ 0-based 索引为 39
-        # print(f"Scenario {idx}")
-        # scenario = scenarios.iloc[idx]
+        scenario = scenarios.iloc[idx]
 
         # if "steps_with_help_paper2" in scenario and pd.notna(scenario["steps_with_help_paper2"]):
         #     continue
-        # if "steps_with_help_gr" in scenario and pd.notna(scenario["steps_with_help_gr"]):
-        #     gr_val = float(scenario["steps_with_help_gr"])
+        # if "steps_with_help_gr_goal" in scenario and pd.notna(scenario["steps_with_help_gr_goal"]):
+        #     continue
+            # gr_val = float(scenario["steps_with_help_gr"])
         
-        #     # uniform may be missing; if missing, do NOT skip (i.e., proceed to test)
-        #     uni_exists = ("steps_with_help_upperbound" in scenario) and pd.notna(scenario["steps_with_help_upperbound"])
-        #     uni_val = float(scenario["steps_with_help_upperbound"]) if uni_exists else None
+            # # uniform may be missing; if missing, do NOT skip (i.e., proceed to test)
+            # uni_exists = ("steps_with_help_upperbound" in scenario) and pd.notna(scenario["steps_with_help_upperbound"])
+            # uni_val = float(scenario["steps_with_help_upperbound"]) if uni_exists else None
         
-        #     if uni_exists and gr_val > uni_val:
-        #         print(f"🔁 Re-test because GR ({gr_val}) > upperbound ({uni_val}).")
-        #         # do NOT continue; fall through to run the test again
-        #     else:
-        #         print(f"✅ steps_with_help_gr existed ({gr_val}) and not worse than upperbound ({uni_val}); skip.")
-        #         continue
+            # if uni_exists and gr_val > uni_val:
+            #     print(f"🔁 Re-test because GR ({gr_val}) > upperbound ({uni_val}).")
+            #     # do NOT continue; fall through to run the test again
+            # else:
+            #     print(f"✅ steps_with_help_gr existed ({gr_val}) and not worse than upperbound ({uni_val}); skip.")
+            #     continue
 
         # 将字符串字段转为对应结构
         base_grid = np.array(eval(scenario["base_grid"]))
@@ -122,23 +124,10 @@ def main(dataset=None):
                     model='obs')
         print(f"Steps taken with help: {with_steps}")
         print(f"First step predict correct goal: {first_step}")
-        scenarios.loc[idx, "steps_with_help_paper2"] = with_steps
-        scenarios.loc[idx, "steps_with_help_paper2_goal"] = first_step
+        scenarios.loc[idx, "steps_with_help_gr"] = with_steps
+        scenarios.loc[idx, "steps_with_help_gr_goal"] = first_step
 
-        #scenarios.loc[idx, "steps_with_help_paper"] = with_steps
-
-        # with_steps = run(base_grid=base_grid,
-        #             base_rooms=base_rooms,
-        #             num_rows=num_rows,
-        #             num_cols=num_cols,
-        #             agents_start_pos=agents_start_pos,
-        #             agents_start_dir=agents_start_dir,
-        #             goals=goals,
-        #             goal=goal,
-        #             model="obs")
-        # print(f"Steps taken with help: {with_steps}")
-        # scenarios.loc[idx, "steps_with_help_paper2"] = with_steps
-        scenarios.to_csv("result_new.csv", index=False)
+        #scenarios.to_csv("result_new.csv", index=False)
 
 
 if __name__ == "__main__":

@@ -74,8 +74,12 @@ def astar(pos_state, target, env, cost = None, heuristic=heuristic_manhattan, ma
             found = current
             #print("Goal Found!")
             break
-
-        
+        obj = env.grid.get(target.i,target.j)
+        if obj and obj.type == "door":
+            if abs(current.pos_state[0][0] - target.i) <= 1 and abs(current.pos_state[0][1] - target.j) <= 1:
+                found = current
+                #print("Goal Found!")
+                break
         # Max number of nodes explored reached
         if max_iter and iter>max_iter:
             return None
@@ -88,21 +92,15 @@ def astar(pos_state, target, env, cost = None, heuristic=heuristic_manhattan, ma
             visited[info_tuple] = current.g
         
         successors = get_successor(env, current.pos_state)
-
         for action, succ in successors:
-
             next_pos, next_dir = succ
             next_pos = Tile(*next_pos)
-
             if isinstance(cost, np.ndarray):
                 edge_cost = cost[next_pos.i, next_pos.j]
             else:
                 edge_cost = 1
-
             next = extend(current, ((next_pos.i, next_pos.j), next_dir), target, edge_cost, heuristic, action)
-
             heapq.heappush(pq, (next.f, next))
-
         iter += 1
     
     if found:
@@ -155,8 +153,8 @@ def execute_action(pos_state, action, env,version = None):
         if version == None:
             if _is_wall(obj):
                 return False, (pos, dir)
-        if _is_closed_door(obj):
-            return False, (pos, dir)
+            if _is_closed_door(obj):
+                return False, (pos, dir)
         # open door / empty / key / box / etc. -> pass
         return True, (new_pos, dir)
     

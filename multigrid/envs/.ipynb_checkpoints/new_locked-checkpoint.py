@@ -228,7 +228,7 @@ def _heuristic(abs_graph: Dict, rid: Any, goal_xy: Optional[Tuple[int,int]]) -> 
 
 def _plan_onekey_persist_open(abs_graph, start_rid, goal_rid,
                               held=None, open_mask=None, goal=None,
-                              max_expansions=500000, pickup_cost=1):
+                              max_expansions=50000, pickup_cost=0):
     """
     返回：events（按时间顺序）
       pickup: {'type':'pickup','room':rid,'key':color,'pos':{...}}

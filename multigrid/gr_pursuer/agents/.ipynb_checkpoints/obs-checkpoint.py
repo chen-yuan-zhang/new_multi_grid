@@ -225,32 +225,30 @@ class Observer(BaseAgent):
             self.abs["rooms"][rid]["keys"].append({
                                         'color': held.color,
                                         'pos': (pos[0],pos[1])})
+
         
         if self.past_pos and self.unsolvable_goal != []:
-            dx, dy = DIR_TO_VEC[dir]
-            new_pos = (pos[0] + dx, pos[1] + dy)
-            if not (0 <= new_pos[0] < self.env.width and 0 <= new_pos[1] < self.env.height):
-                if self.past_pos == pos and self.past_dir == dir:
-                    for goal_room in self.unsolvable_goal:
-                        self.high_level_length[goal_room][0] += 10
-                else:
-                    for goal_room in self.unsolvable_goal:
-                        self.high_level_length[goal_room][0] -= 10
+            if self.past_pos == pos and self.past_dir == dir:
+                for goal_room in self.unsolvable_goal:
+                    self.high_level_length[goal_room][0] += 10
             else:
-                obj = self.env.grid.get(*new_pos)
-                if self.past_pos == pos and self.past_dir == dir:
-                    if obj and obj.type == "door":
-                        for goal_room, (length_val, path_list) in self.high_level_length.items():
-                            for event in path_list:
-                                if 'pos' in event and event['pos']['value'] == new_pos:
-                                    self.high_level_length[goal_room][0] -= 10
-                                    break
-                    else:
-                        for goal_room in self.unsolvable_goal:
-                            self.high_level_length[goal_room][0] += 10
-                else:
-                    for goal_room in self.unsolvable_goal:
-                        self.high_level_length[goal_room][0] -= 10
+                for goal_room in self.unsolvable_goal:
+                    self.high_level_length[goal_room][0] -= 10
+            # else:
+            #     obj = self.env.grid.get(*new_pos)
+            #     if self.past_pos == pos and self.past_dir == dir:
+            #         if obj and obj.type == "door":
+            #             for goal_room, (length_val, path_list) in self.high_level_length.items():
+            #                 for event in path_list:
+            #                     if 'pos' in event and event['pos']['value'] == new_pos:
+            #                         self.high_level_length[goal_room][0] -= 10
+            #                         break
+            #         else:
+            #             for goal_room in self.unsolvable_goal:
+            #                 self.high_level_length[goal_room][0] += 10
+            #     else:
+            #         for goal_room in self.unsolvable_goal:
+            #             self.high_level_length[goal_room][0] -= 10
 
         if self.new_env :
             #print("new env!")
@@ -285,7 +283,10 @@ class Observer(BaseAgent):
                     
         else:
             self.steps += 1
-                    
+
+
+        # if self.belif_goal:
+        #     return [1 if g == self.belif_goal else 0 for g in self.goals]
         # return [1 for i in range(len(self.goals))] #uniform
         # return [1 if g == self.goal else 0 for g in self.goals]
         if self.current_palns == []:
@@ -306,10 +307,15 @@ class Observer(BaseAgent):
                 diff = subgoal_dist - subgoal_optimal
                 subgoal_pro.append(diff)
                 
-                for goal_room in self.goal_rooms:
-                    plan_len = len(_plan_onekey_persist_open(self.abs, start_rid, goal_room, held = plan['key']))
+                for goal_room_idx in range(len(self.goal_rooms)):
+                    goal = self.goals[goal_room_idx]
+                    goal_room = self.goal_rooms[goal_room_idx]
+                    optimal_high_length = self.high_level_length[goal_room][0]
+                    if self.high_level_length[goal_room][0] == 1:
+                        optimal_high_length = -100
+                    plan_len = len(_plan_onekey_persist_open(self.abs, start_rid, goal_room, held = plan['key'],goal = goal))
                     current_high_length  = self.finished_plan + plan_len + 1
-                    var = current_high_length - self.high_level_length[goal_room][0]
+                    var = current_high_length - optimal_high_length
                     softmax.append(var)
             elif plan['type'] == 'open':
                 subgoal_dist = self.steps + len(astar_open(
@@ -318,12 +324,17 @@ class Observer(BaseAgent):
                 diff = subgoal_dist - subgoal_optimal
                 subgoal_pro.append(diff)
                 
-                for goal_room in self.goal_rooms:
+                for goal_room_idx in range(len(self.goal_rooms)):
+                    goal = self.goals[goal_room_idx]
+                    goal_room = self.goal_rooms[goal_room_idx]
+                    optimal_high_length = self.high_level_length[goal_room][0]
+                    if self.high_level_length[goal_room][0] == 1:
+                        optimal_high_length = -100
                     mask = _initial_open_mask(self.abs)
                     mask |= (1 << plan['eid'])
-                    plan_len = len(_plan_onekey_persist_open(self.abs, start_rid, goal_room, held = held,open_mask = mask))
+                    plan_len = len(_plan_onekey_persist_open(self.abs, start_rid, goal_room, held = held,open_mask = mask,goal = goal))
                     current_high_length = self.finished_plan + plan_len + 1
-                    var = current_high_length - self.high_level_length[goal_room][0]
+                    var = current_high_length - optimal_high_length
                     softmax.append(var)
             else:
                 subgoal_dist = self.steps + len(astar((pos, dir), plan['pos']['value'], self.env, self.hidden_cost))
@@ -343,25 +354,27 @@ class Observer(BaseAgent):
         self.past_dir = dir
         
         # print([(plan['pos']['value'],plan['type']) for plan in self.current_palns])
-        # print("subgoal_pro", [f"{x}" for x in subgoal_pro])
-        #print("subgoal_final_pro\n")
-        # for i in subgoal_final_pro:
-        #     print([f"{x:.2f}" for x in i])
-        
+        print("subgoal_pro", [f"{x}" for x in subgoal_pro])
+        for i in subgoal_final_pro:
+            print([f"{x:.2f}" for x in i])
+        #print(self.prior)
         if self.past_plans != self.current_palns:
-            w = np.linalg.lstsq(np.array(subgoal_final_pro).T, np.array(self.prior), rcond=None)[0]
-            self.weights  = _project_to_simplex(w)
-            weights = self.weights 
+            w = np.linalg.lstsq(np.array(subgoal_final_pro).T, np.array(self.current_prior), rcond=None)[0]
+            weights = softmax_prob(subgoal_pro)
+            self.weights  = np.exp(w)
+            self.weights   = self.weights   / np.sum(self.weights) 
+            weights = [self.weights[g]*weights[g] for g in range(len(weights))]
+            weights = [w / sum(weights) for w in weights]
             likelihood = weighted_goal_probabilities(weights, subgoal_final_pro)
         else:
             weights = softmax_prob(subgoal_pro)
-            weights = [self.weights[g] * weights[g] for g in range(len(weights))]
+            weights = [self.weights[g]*weights[g] for g in range(len(weights))]
             weights = [w / sum(weights) for w in weights]
             likelihood  = weighted_goal_probabilities(weights, subgoal_final_pro)
 
 
-        # print("prio weights",[f"{x:.2f}" for x in self.weights])
-        # print("weights",[f"{x:.2f}" for x in weights])
+        print("prio weights",[f"{x:.2f}" for x in self.weights])
+        print("weights",[f"{x:.2f}" for x in weights])
                 
         post = {g: 0.0 for g in self.goal_rooms}
         for gi, g in enumerate(self.goal_rooms):
@@ -376,27 +389,27 @@ class Observer(BaseAgent):
         self.past_plans = self.current_palns
 
         
-        #paper
-        #if self.env.step_count > 5 and  self.belif_goal is None:
+        # #paper
+        # if self.env.step_count > 5 and  self.belif_goal is None:
 
-        if max(prob)> (1/len(self.goals)+0.1) and  self.belif_goal is None:
-            best_idx = int(np.argmax(prob))
-            self.belif_goal = self.goals[best_idx]
+        # #if max(prob)> (1/len(self.goals)+0.1) and  self.belif_goal is None:
+        #     best_idx = int(np.argmax(prob))
+        #     self.belif_goal = self.goals[best_idx]
 
-        if self.belif_goal:
-            return [1 if g == self.belif_goal else 0 for g in self.goals]
+        # if self.belif_goal:
+        #     return [1 if g == self.belif_goal else 0 for g in self.goals]
 
-        return [1 for i in range(len(self.goals))] 
+        # return [1 for i in range(len(self.goals))] 
         
         #return [1 if g == self.goal else 0 for g in self.goals] # upperbound
 
     
-        # print("prob:",[f"{x:.2f}" for x in prob])
-        # print(self.goal_rooms)
+        print("prob:",[f"{x:.2f}" for x in prob])
+        print(self.goal_rooms)
         
-        # best_idx = int(np.argmax(prob))
-        # self.belif_goal = self.goals[best_idx]
-        # return prob   #gr
+        best_idx = int(np.argmax(prob))
+        self.belif_goal = self.goals[best_idx]
+        return prob   #gr
         #return 0
 
 
@@ -447,11 +460,12 @@ class Observer(BaseAgent):
                     excepted_payoff = goal_recognition[goal_room_idx] * payoff
                     subgoal_expected_payoff[eid] += excepted_payoff
 
+       # print(subgoal_expected_payoff)
         if subgoal_expected_payoff == {}:
             return 0
         max_door = max(subgoal_expected_payoff, key=subgoal_expected_payoff.get)
         door = self.abs["edges"][max_door]
-        #print(door["pos"],door["color"],max_door,subgoal_expected_payoff[max_door])
+       # print(door["pos"],door["color"],max_door,subgoal_expected_payoff[max_door])
         
         path = []
         if obs_held:
@@ -609,7 +623,7 @@ class Observer(BaseAgent):
         for i, door in enumerate(self.abs["edges"]):
             obj = self.env.grid.get(*door["pos"])
             if obj and (obj.type == "door"):
-                locked = (obj.state != "open")
+                locked = (obj.state == "locked")
             else:
                 locked = False
             door["locked"] = locked
