@@ -199,6 +199,20 @@ class Observer(BaseAgent):
                 self.unsolvable_goal.append(goal_room)
             self.goal_length[goal_room] = high_level_plan
         self.new_env = False
+
+    # def length_compute(self,pos,dir,plan_list,abs_graph):
+    #     #print("a new plan")
+    #     abs_graph_new = deepcopy(abs_graph)
+    #     if plan_list == []:
+    #         return 5000
+    #     total_length = 0
+    #     for plan in plan_list:
+    #         #print(plan)
+    #         total_length += len(astar((pos, dir), plan['pos']['value'], self.env, self.hidden_cost,mask = abs_graph_new["edges"]))
+    #         if plan['type'] == 'open':
+    #             abs_graph_new["edges"][plan['eid']]["locked"] = False
+    #         pos = plan['pos']['value']
+    #     return total_length
         
 
     def length_compute(self,pos,dir,plan_list):
@@ -225,8 +239,6 @@ class Observer(BaseAgent):
             self.abs["rooms"][rid]["keys"].append({
                                         'color': held.color,
                                         'pos': (pos[0],pos[1])})
-
-        
         if self.past_pos and self.unsolvable_goal != []:
             if self.past_pos == pos and self.past_dir == dir:
                 for goal_room in self.unsolvable_goal:
@@ -234,21 +246,6 @@ class Observer(BaseAgent):
             else:
                 for goal_room in self.unsolvable_goal:
                     self.high_level_length[goal_room][0] -= 10
-            # else:
-            #     obj = self.env.grid.get(*new_pos)
-            #     if self.past_pos == pos and self.past_dir == dir:
-            #         if obj and obj.type == "door":
-            #             for goal_room, (length_val, path_list) in self.high_level_length.items():
-            #                 for event in path_list:
-            #                     if 'pos' in event and event['pos']['value'] == new_pos:
-            #                         self.high_level_length[goal_room][0] -= 10
-            #                         break
-            #         else:
-            #             for goal_room in self.unsolvable_goal:
-            #                 self.high_level_length[goal_room][0] += 10
-            #     else:
-            #         for goal_room in self.unsolvable_goal:
-            #             self.high_level_length[goal_room][0] -= 10
 
         if self.new_env :
             #print("new env!")
@@ -284,11 +281,12 @@ class Observer(BaseAgent):
         else:
             self.steps += 1
 
+        return [1 if g == self.goal else 0 for g in self.goals] # upperbound
 
         # if self.belif_goal:
         #     return [1 if g == self.belif_goal else 0 for g in self.goals]
-        # return [1 for i in range(len(self.goals))] #uniform
-        # return [1 if g == self.goal else 0 for g in self.goals]
+        
+        return [1 for i in range(len(self.goals))] #uniform
         if self.current_palns == []:
             return [1 for i in range(len(self.goals))]
 
@@ -311,8 +309,8 @@ class Observer(BaseAgent):
                     goal = self.goals[goal_room_idx]
                     goal_room = self.goal_rooms[goal_room_idx]
                     optimal_high_length = self.high_level_length[goal_room][0]
-                    if self.high_level_length[goal_room][0] == 1:
-                        optimal_high_length = -100
+                    # if self.high_level_length[goal_room][0] == 1:
+                    #     optimal_high_length = -100
                     plan_len = len(_plan_onekey_persist_open(self.abs, start_rid, goal_room, held = plan['key'],goal = goal))
                     current_high_length  = self.finished_plan + plan_len + 1
                     var = current_high_length - optimal_high_length
@@ -328,8 +326,8 @@ class Observer(BaseAgent):
                     goal = self.goals[goal_room_idx]
                     goal_room = self.goal_rooms[goal_room_idx]
                     optimal_high_length = self.high_level_length[goal_room][0]
-                    if self.high_level_length[goal_room][0] == 1:
-                        optimal_high_length = -100
+                    # if self.high_level_length[goal_room][0] == 1:
+                    #     optimal_high_length = -100
                     mask = _initial_open_mask(self.abs)
                     mask |= (1 << plan['eid'])
                     plan_len = len(_plan_onekey_persist_open(self.abs, start_rid, goal_room, held = held,open_mask = mask,goal = goal))
@@ -354,9 +352,9 @@ class Observer(BaseAgent):
         self.past_dir = dir
         
         # print([(plan['pos']['value'],plan['type']) for plan in self.current_palns])
-        print("subgoal_pro", [f"{x}" for x in subgoal_pro])
-        for i in subgoal_final_pro:
-            print([f"{x:.2f}" for x in i])
+        #print("subgoal_pro", [f"{x}" for x in subgoal_pro])
+        # for i in subgoal_final_pro:
+        #     print([f"{x:.2f}" for x in i])
         #print(self.prior)
         if self.past_plans != self.current_palns:
             w = np.linalg.lstsq(np.array(subgoal_final_pro).T, np.array(self.current_prior), rcond=None)[0]
@@ -373,8 +371,8 @@ class Observer(BaseAgent):
             likelihood  = weighted_goal_probabilities(weights, subgoal_final_pro)
 
 
-        print("prio weights",[f"{x:.2f}" for x in self.weights])
-        print("weights",[f"{x:.2f}" for x in weights])
+        # print("prio weights",[f"{x:.2f}" for x in self.weights])
+        # print("weights",[f"{x:.2f}" for x in weights])
                 
         post = {g: 0.0 for g in self.goal_rooms}
         for gi, g in enumerate(self.goal_rooms):
@@ -389,29 +387,29 @@ class Observer(BaseAgent):
         self.past_plans = self.current_palns
 
         
-        # #paper
-        # if self.env.step_count > 5 and  self.belif_goal is None:
+        #paper
+        if self.env.step_count > 5 and  self.belif_goal is None:
 
-        # #if max(prob)> (1/len(self.goals)+0.1) and  self.belif_goal is None:
-        #     best_idx = int(np.argmax(prob))
-        #     self.belif_goal = self.goals[best_idx]
+        #if max(prob)> (1/len(self.goals)+0.1) and  self.belif_goal is None:
+            best_idx = int(np.argmax(prob))
+            self.belif_goal = self.goals[best_idx]
 
-        # if self.belif_goal:
-        #     return [1 if g == self.belif_goal else 0 for g in self.goals]
+        if self.belif_goal:
+            return [1 if g == self.belif_goal else 0 for g in self.goals]
 
-        # return [1 for i in range(len(self.goals))] 
+        return [1 for i in range(len(self.goals))] 
         
         #return [1 if g == self.goal else 0 for g in self.goals] # upperbound
 
-    
-        print("prob:",[f"{x:.2f}" for x in prob])
-        print(self.goal_rooms)
+        
+        #print("prob:",[f"{x:.2f}" for x in prob])
+        #print(self.goal_rooms)
         
         best_idx = int(np.argmax(prob))
         self.belif_goal = self.goals[best_idx]
         return prob   #gr
         #return 0
-
+    
 
     def compute_action(self, obs):
         pos = self.env.target.pos
@@ -438,7 +436,8 @@ class Observer(BaseAgent):
                 subgoal_expected_payoff[eid] = 0
                 if all_keys  != []:
                     if (obs_held is None or obs_held.color != door["color"]):
-                        nearest = min(all_keys, key=lambda k: manhattan_distance(k['pos'], obs_pos) + manhattan_distance(k['pos'],door["pos"]))
+                        nearest = min(all_keys, key=lambda k: manhattan_distance(k['pos'], obs_pos) 
+                                      + manhattan_distance(k['pos'],door["pos"]))
                         key_distance = manhattan_distance(nearest["pos"],door["pos"]) + manhattan_distance(nearest["pos"],obs_pos)
                         if {"color":nearest["color"],"pos":nearest["pos"]} in abs_graph_new["rooms"][nearest["room"]]["keys"]:
                             keys = abs_graph_new["rooms"][nearest["room"]]["keys"]
@@ -1073,3 +1072,78 @@ def fit_weights_keep_prior(lik_rows, max_iter=50000, lr=0.5, tol=1e-9):
         w = w_new
 
     return w
+
+
+def astar_length(start, goal, neighbors_fn, heuristic_fn):
+    """
+    返回从 start 到 goal 的最短路长度（步数或加权成本）。
+    找不到路径时返回 None。
+    - start, goal: 任意可 hash 的节点（如 (x,y) 或 (x,y,dir)）
+    - neighbors_fn(node) -> iterable[(next_node, step_cost)]
+    - heuristic_fn(node, goal) -> 估计成本
+    """
+    if start == goal:
+        return 0
+
+    open_heap = []
+    g = {start: 0.0}
+    f0 = heuristic_fn(start, goal)
+    heapq.heappush(open_heap, (f0, 0.0, start))
+    closed = set()
+
+    while open_heap:
+        f_val, g_val, node = heapq.heappop(open_heap)
+        if node in closed:
+            continue
+        if node == goal:
+            return g_val
+        closed.add(node)
+
+        for nxt, step_cost in neighbors_fn(node):
+            if step_cost is None:
+                continue
+            ng = g_val + step_cost
+            if nxt in closed and ng >= g.get(nxt, float('inf')):
+                continue
+            if ng < g.get(nxt, float('inf')):
+                g[nxt] = ng
+                nf = ng + heuristic_fn(nxt, goal)
+                heapq.heappush(open_heap, (nf, ng, nxt))
+
+    return None
+
+def make_grid_neighbors_fn(is_walkable, diag=False):
+    """
+    is_walkable(x, y) -> bool：你需要提供的函数/闭包（含门是否已开等判断）。
+    diag=True 则允许 8 邻接（对角），diag=False 仅 4 邻接。
+    """
+    if diag:
+        steps = [(1,0),(-1,0),(0,1),(0,-1),(1,1),(1,-1),(-1,1),(-1,-1)]
+    else:
+        steps = [(1,0),(-1,0),(0,1),(0,-1)]
+
+    def neighbors(node):
+        x, y = node
+        for dx, dy in steps:
+            nx, ny = x+dx, y+dy
+            if is_walkable(nx, ny):
+                # 对角可选用 √2 成本；4 邻接用 1
+                yield ( (nx, ny), (sqrt(2) if diag and dx!=0 and dy!=0 else 1.0) )
+    return neighbors
+
+def manhattan_h(a, b):
+    (x1, y1), (x2, y2) = a, b
+    return abs(x1-x2) + abs(y1-y2)
+
+def octile_h(a, b):
+    # 适用于 8 邻接（比纯欧氏/曼哈顿更紧）
+    (x1,y1), (x2,y2) = a, b
+    dx, dy = abs(x1-x2), abs(y1-y2)
+    return (dx + dy) + (sqrt(2) - 2) * min(dx, dy)
+
+
+def is_walkable(x, y):
+    H, W = len(self.grid), len(self.grid[0])
+    if 0 <= y < H and 0 <= x < W:
+        return bool(self.grid[y][x])   # 这里把门/锁的状态也融合进去
+    return False

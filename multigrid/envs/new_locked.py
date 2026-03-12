@@ -477,7 +477,7 @@ class AGRlocked(RoomGrid):
         max_hallway_keys: int = 1,
         max_keys_per_room: int = 2,
         num_rows: int = 2,
-        num_cols: int = 3,
+        num_cols: int = 2,
 
         
         base_grid: np.ndarray | None = None,

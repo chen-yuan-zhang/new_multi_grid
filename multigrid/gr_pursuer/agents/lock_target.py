@@ -1,6 +1,6 @@
 from .base import BaseAgent
-from ..lock_astar import astar_key,astar_open,get_successor#,astar_unified_to_goal
-from ..new_astar import astar
+from ..lock_astar import astar_key,astar_open#,astar_unified_to_goal
+from ..new_astar import astar,get_successor
 
 from multigrid.core.actions import Action
 
@@ -75,12 +75,23 @@ class LockTarget(BaseAgent):
         else:
             self.hidden_cost = np.ones((env.width, env.height), dtype=np.float32)
 
-    def compute_action(self, obs):
+    #def compute_action(self, obs):
+    def compute_action(self, obs, epsilon=0.5):
+
         pos = self.env.target.state.pos
         dir = self.env.target.state.dir
         held = self.env.target.carrying
         start_rid = _rid_from_xy(self.env,*pos,self.hallway_col)
         self.update_door_state()
+        legal_actions = []
+        successors = get_successor(self.env,(pos, dir))
+
+        for action, _ in successors:
+            legal_actions.append(action)
+        if random.random() < epsilon:
+            print("choose random action")
+            return random.choice(legal_actions)
+            
         if held:
             rid = _rid_from_xy(self.env, pos[0], pos[1], self.hallway_col)
             self.abs["rooms"][rid]["keys"].append({

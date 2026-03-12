@@ -54,8 +54,7 @@ def get_path(label):
     return path
 
 
-def astar(pos_state, target, env, cost = None, heuristic=heuristic_manhattan, max_iter=None):
-
+def astar(pos_state, target, env, cost = None, heuristic=heuristic_manhattan, max_iter=None,mask = None):
     #print(pos_state,target)
     target = Tile(*target)
     pos, dir = pos_state
@@ -91,7 +90,7 @@ def astar(pos_state, target, env, cost = None, heuristic=heuristic_manhattan, ma
         else:
             visited[info_tuple] = current.g
         
-        successors = get_successor(env, current.pos_state)
+        successors = get_successor(env, current.pos_state,mask = mask)
         for action, succ in successors:
             next_pos, next_dir = succ
             next_pos = Tile(*next_pos)
@@ -112,12 +111,15 @@ def astar(pos_state, target, env, cost = None, heuristic=heuristic_manhattan, ma
 
 def _is_wall(obj):
     return obj is not None and getattr(obj, "type", None) == "wall"
-
-
-def _is_closed_door(obj):
+    
+def _is_closed_door(obj,mask,new_pos):
+    if mask:
+        for door in mask:
+            if door["pos"] == new_pos:
+                return door['locked']
     return (obj is not None) and hasattr(obj, "is_open") and (not obj.is_open)
     
-def execute_action(pos_state, action, env,version = None):
+def execute_action(pos_state, action,env,version = None,mask = None):
     """
     Execute an action in the environment.
     
@@ -153,7 +155,7 @@ def execute_action(pos_state, action, env,version = None):
         if version == None:
             if _is_wall(obj):
                 return False, (pos, dir)
-            if _is_closed_door(obj):
+            if _is_closed_door(obj,mask,new_pos):
                 return False, (pos, dir)
         # open door / empty / key / box / etc. -> pass
         return True, (new_pos, dir)
@@ -163,11 +165,8 @@ def execute_action(pos_state, action, env,version = None):
         new_pos = (pos[0] + dx, pos[1] + dy)
         if 0 <= new_pos[0] < env.width and 0 <= new_pos[1] < env.height and (env.grid.get(*new_pos) is not None):
             return True, (pos, dir)
-
-
     if action == Action.stay:
         return True, (pos, dir)
-        
     return False, (pos, dir) # If the agent hits a wall, return the current state
     
 
@@ -248,7 +247,7 @@ def execute_obs_action(pos_state, action, env):
     if action == Action.stay:
         return True, (pos, dir)
 
-def get_successor(env, pos_state):
+def get_successor(env, pos_state,version = None,mask = None):
     """
     Generate the next position and direction given the current position and direction.
     
@@ -267,7 +266,7 @@ def get_successor(env, pos_state):
     actions = [Action.left, Action.right, Action.forward, Action.stay]
 
     for action in actions:
-        status, successor = execute_action((pos, dir), action, env)
+        status, successor = execute_action((pos, dir), action, env,version = version,mask = mask)
         if status:
             successors.append((action, successor))
 

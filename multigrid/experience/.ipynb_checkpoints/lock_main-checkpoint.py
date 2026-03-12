@@ -20,7 +20,7 @@ def run(base_grid=None, base_rooms=None, num_rows=None, num_cols=None,
                     agents_start_dir=agents_start_dir,
                     goals=goals,
                     goal=goal,
-                    render_mode=render_mode)
+                    render_mode=None)
 
     observation, infos = env.reset()
     #TargetAgent  = OldLockTarget(env)
@@ -31,7 +31,7 @@ def run(base_grid=None, base_rooms=None, num_rows=None, num_cols=None,
     flag = False
     first_step = -1
     steps = 0
-    while not env.unwrapped.is_done() and steps <= 200:
+    while not env.unwrapped.is_done() and steps <= 400:
         actions = {agent.index: agent.action_space.sample() for agent in env.unwrapped.agents}
         if model is None:
             actions[0] = Action.stay
@@ -44,7 +44,7 @@ def run(base_grid=None, base_rooms=None, num_rows=None, num_cols=None,
         print(actions)
         observation, reward, terminated, truncated, info = env.step(actions)
         steps += 1
-        input()
+        #input()
 
         predicted_goal = ObserverAgent.belif_goal
         if predicted_goal == env.goal:
@@ -57,8 +57,6 @@ def run(base_grid=None, base_rooms=None, num_rows=None, num_cols=None,
             flag = False
             first_step = -1
 
-    if first_step == -1:
-        first_step = steps
 
     env.close()
     return steps,first_step
@@ -69,13 +67,13 @@ def main(dataset=None):
     print(dataset)
     if dataset is not None:
         scenarios = pd.read_csv(dataset)
-    # for idx, scenario in scenarios.iterrows():
-    #     print(f"Scenario {idx}")
-        idx = 369  # 第40个（1-based）→ 0-based 索引为 39
+    for idx, scenario in scenarios.iterrows():
         print(f"Scenario {idx}")
-        scenario = scenarios.iloc[idx]
+        # idx = 5  
+        # print(f"Scenario {idx}")
+        # scenario = scenarios.iloc[idx]
 
-        # if "steps_with_help_paper2" in scenario and pd.notna(scenario["steps_with_help_paper2"]):
+        # if "steps_with_help_uniform_e5" in scenario and pd.notna(scenario["steps_with_help_uniform_e5"]):
         #     continue
         # if "steps_with_help_gr_goal" in scenario and pd.notna(scenario["steps_with_help_gr_goal"]):
         #     continue
@@ -121,13 +119,13 @@ def main(dataset=None):
                     agents_start_dir=agents_start_dir,
                     goals=goals,
                     goal=goal,
-                    model='obs')
+                    model="obs")
         print(f"Steps taken with help: {with_steps}")
         print(f"First step predict correct goal: {first_step}")
-        scenarios.loc[idx, "steps_with_help_gr"] = with_steps
-        scenarios.loc[idx, "steps_with_help_gr_goal"] = first_step
+        scenarios.loc[idx, "steps_with_help_upperbound_e5"] = with_steps
+        #scenarios.loc[idx, "steps_without_e2"] = first_step
 
-        #scenarios.to_csv("result_new.csv", index=False)
+        scenarios.to_csv("result_new_2.csv", index=False)
 
 
 if __name__ == "__main__":
